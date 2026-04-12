@@ -199,6 +199,42 @@ Record the action taken on a notification (e.g. a reply or button tap). Updates 
 
 ---
 
+#### `POST /api/device-tokens`
+
+Register or update an Android FCM device token for push delivery to the phone app.
+Uses `INSERT OR REPLACE`, so re-registering the same userId updates the stored token.
+
+**Request body**
+
+| Field    | Type   | Required | Description              |
+|----------|--------|----------|--------------------------|
+| `userId` | string | Yes      | User UUID                |
+| `token`  | string | Yes      | FCM registration token   |
+
+**Responses**
+
+| Status | Description             | Body                        |
+|--------|-------------------------|-----------------------------|
+| `200`  | Token stored            | `{ success: true }`         |
+| `401`  | Missing/invalid userId  | `{ success: false, error }` |
+| `500`  | Server error            | `{ success: false, error }` |
+
+> When a notification is dismissed or an action is taken via the web UI, the backend should
+> send a FCM **data message** (not a notification message) to the stored token:
+>
+> Dismiss:
+> ```json
+> { "type": "dismiss", "notificationId": "<serverId>" }
+> ```
+> Action:
+> ```json
+> { "type": "action", "notificationId": "<serverId>", "actionTaken": "<title>", "actionResponse": "<text>" }
+> ```
+> `actionResponse` is optional. The `actionTaken` value must exactly match the action title
+> string stored in the notification's `actions` array (or a recognised alias — see app code).
+
+---
+
 ### Push Subscriptions
 
 #### `GET /api/vapid-public-key`

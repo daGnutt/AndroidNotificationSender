@@ -121,6 +121,29 @@ class ApiClient {
         getNotifications(endpoint, userId)?.map { it.id }?.toSet()
 
     /**
+     * POST /api/device-tokens — registers or updates the FCM token for push delivery.
+     * Returns null on success, or an error string on failure.
+     */
+    fun registerFcmToken(endpoint: String, userId: String, token: String): String? {
+        return try {
+            val payload = JSONObject().apply {
+                put("userId", userId)
+                put("token", token)
+            }
+            val request = Request.Builder()
+                .url("$endpoint/api/device-tokens")
+                .post(payload.toString().toRequestBody(jsonMediaType))
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) null
+                else "HTTP ${response.code}: ${response.body?.string()?.take(200)}"
+            }
+        } catch (e: Exception) {
+            e.message ?: e.javaClass.simpleName
+        }
+    }
+
+    /**
      * GET /api/users/:userId — validates that the userId exists on the server.
      * Returns null on success, or an error string describing the failure.
      */
