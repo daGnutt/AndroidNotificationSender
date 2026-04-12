@@ -37,7 +37,8 @@ class ApiClient {
         sourcePackage: String,
         appName: String? = null,
         icon: String? = null,
-        actions: List<Pair<Int, String>>? = null
+        actions: List<Pair<Int, String>>? = null,
+        messages: List<NotificationMessage>? = null
     ): String? {
         val payload = JSONObject().apply {
             put("userId", userId)
@@ -56,6 +57,18 @@ class ApiClient {
                     })
                 }
                 put("actions", actionsArray)
+            }
+            if (!messages.isNullOrEmpty()) {
+                val messagesArray = org.json.JSONArray()
+                for (msg in messages) {
+                    messagesArray.put(JSONObject().apply {
+                        if (msg.sender != null) put("sender", msg.sender)
+                        put("text", msg.text)
+                        put("timestamp", isoFormat.format(Date(msg.timestampMs)))
+                        if (msg.senderIcon != null) put("senderIcon", msg.senderIcon)
+                    })
+                }
+                put("messages", messagesArray)
             }
         }
 
@@ -167,4 +180,11 @@ data class ServerNotification(
     val id: String,
     val actionTaken: String?,
     val actionResponse: String?
+)
+
+data class NotificationMessage(
+    val sender: String?,
+    val text: String,
+    val timestampMs: Long,
+    val senderIcon: String?  // base64 PNG, may be null
 )

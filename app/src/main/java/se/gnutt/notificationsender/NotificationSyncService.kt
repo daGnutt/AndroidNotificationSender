@@ -271,21 +271,19 @@ class NotificationSyncService : NotificationListenerService() {
         val bigText = extras.getCharSequence("android.bigText")?.toString()
 
         // MessagingStyle notifications (e.g. Messenger, WhatsApp) store the full
-        // message history in android.messages as an array of Bundles. Extract and
-        // format all messages so the web UI sees the full conversation, not just the
-        // latest line.
+        // message history in android.messages as an array of Bundles.
         val messagesArray = extras.getParcelableArray("android.messages")
-        val body = if (!messagesArray.isNullOrEmpty()) {
-            messagesArray.mapNotNull { item ->
-                val bundle = item as? android.os.Bundle ?: return@mapNotNull null
-                val msgText = bundle.getCharSequence("text")?.toString()?.takeIf { it.isNotBlank() }
-                    ?: return@mapNotNull null
-                val sender = bundle.getCharSequence("sender")
-                    ?: bundle.getBundle("sender_person")?.getCharSequence("name")
-                if (sender != null) "$sender: $msgText" else msgText
-            }.joinToString("\n")
+        val structuredMessages: List<NotificationMessage>?
+        val body: String
+
+        if (!messagesArray.isNullOrEmpty()) {
+            structuredMessages = messagesArray.mapNotNull { extractMessage(it) }
+            body = structuredMessages.joinToString("\n") { msg ->
+                if (msg.sender != null) "${msg.sender}: ${msg.text}" else msg.text
+            }
         } else {
-            bigText?.takeIf { it.isNotBlank() } ?: text
+            structuredMessages = null
+            body = bigText?.takeIf { it.isNotBlank() } ?: text
         }
         val appName = getAppName(sbn.packageName)
         val iconBase64 = getAppIconBase64(sbn.packageName)
@@ -305,7 +303,8 @@ class NotificationSyncService : NotificationListenerService() {
                 sourcePackage = sbn.packageName,
                 appName = appName,
                 icon = iconBase64,
-                actions = actions
+                actions = actions,
+                messages = structuredMessages
             )
             if (serverId != null) {
                 settings.storeNotificationMapping(sbn.key, serverId)
@@ -350,6 +349,57 @@ class NotificationSyncService : NotificationListenerService() {
             packageName
         }
     }
+
+    private suspend fun extractMessage(item: Any?): NotificationMessage? {
+        val bundle = item as? android.os.Bundle ?: return null
+        val msgText = bundle.getCharSequence("text")?.toString()?.takeIf { it.isNotBlank() }
+            ?: return null
+        val timestampMs = bundle.getLong("time", 0L)
+
+        // Sender name: prefer sender_person.name, fall back to top-level "sender"
+        val personBundle = bundle.getBundle("sender_person")
+        val senderName = personBundle?.getCharSequence("name")?.toString()
+            ?: bundle.getCharSequence("sender")?.toString()
+
+        // Sender avatar from Person.icon
+        val senderIcon = personBundle?.let { person ->
+            try {
+                @Suppress("DEPRECATION")
+                val icon = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    person.getParcelable("icon", android.graphics.drawable.Icon::class.java)
+                } else {
+                    person.getParcelable("icon")
+                }
+                icon?.let { getSenderIconBase64(it) }
+            } catch (_: Exception) { null }
+        }
+
+        return NotificationMessage(
+            sender = senderName,
+            text = msgText,
+            timestampMs = timestampMs,
+            senderIcon = senderIcon
+        )
+    }
+
+    private suspend fun getSenderIconBase64(icon: android.graphics.drawable.Icon): String? =
+        withContext(Dispatchers.Main) {
+            try {
+                val drawable = icon.loadDrawable(this@NotificationSyncService) ?: return@withContext null
+                val size = 96
+                val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(bitmap)
+                drawable.setBounds(0, 0, size, size)
+                drawable.draw(canvas)
+                val stream = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to extract sender icon: ${e.message}")
+                null
+            }
+        }
+
 
     private suspend fun getAppIconBase64(packageName: String): String? = withContext(Dispatchers.Main) {
         try {
