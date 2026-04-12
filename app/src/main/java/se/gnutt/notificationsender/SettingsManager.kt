@@ -11,6 +11,7 @@ class SettingsManager(context: Context) {
         private const val KEY_ENDPOINT = "endpoint"
         private const val KEY_USER_ID = "userId"
         private const val KEY_NOTIFICATION_MAP = "notificationMap"
+        private const val KEY_FCM_TOKEN = "fcmToken"
     }
 
     private val prefs: SharedPreferences =
@@ -23,6 +24,10 @@ class SettingsManager(context: Context) {
     var userId: String
         get() = prefs.getString(KEY_USER_ID, "") ?: ""
         set(value) = prefs.edit().putString(KEY_USER_ID, value).apply()
+
+    var fcmToken: String?
+        get() = prefs.getString(KEY_FCM_TOKEN, null)
+        set(value) = prefs.edit().putString(KEY_FCM_TOKEN, value).apply()
 
     val isConfigured: Boolean
         get() = endpoint.isNotBlank() && userId.isNotBlank()
@@ -51,6 +56,12 @@ class SettingsManager(context: Context) {
         val map = readMap()
         map.remove(notificationKey)
         saveMap(map)
+    }
+
+    @Synchronized
+    fun getNotificationKeyByServerId(serverId: String): String? {
+        val map = readMap()
+        return map.keys().asSequence().firstOrNull { map.getString(it) == serverId }
     }
 
     private fun readMap(): JSONObject {

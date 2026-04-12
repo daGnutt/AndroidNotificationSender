@@ -11,20 +11,40 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Base64
 import android.util.Log
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.ConcurrentHashMap
 
 class NotificationSyncService : NotificationListenerService() {
 
     companion object {
         private const val TAG = "NotificationSync"
         const val ACTION_REFRESH = "se.gnutt.notificationsender.REFRESH_NOTIFICATIONS"
+
+        // Maps common action name aliases (including emoji) to Android semantic action integers.
+        // See Notification.Action.SEMANTIC_ACTION_* constants.
+        private val SEMANTIC_ACTION_ALIASES = mapOf(
+            "like"         to 8,  // SEMANTIC_ACTION_THUMBS_UP
+            "thumbs up"    to 8,
+            "👍"           to 8,
+            "dislike"      to 9,  // SEMANTIC_ACTION_THUMBS_DOWN
+            "thumbs down"  to 9,
+            "👎"           to 9,
+            "reply"        to 1,  // SEMANTIC_ACTION_REPLY
+            "mark as read" to 2,  // SEMANTIC_ACTION_MARK_AS_READ
+            "read"         to 2,
+            "archive"      to 5,  // SEMANTIC_ACTION_ARCHIVE
+            "mute"         to 6,  // SEMANTIC_ACTION_MUTE
+        )
     }
 
     private val job = SupervisorJob()
@@ -33,10 +53,42 @@ class NotificationSyncService : NotificationListenerService() {
     private lateinit var settings: SettingsManager
     private lateinit var apiClient: ApiClient
 
+    // Serialises concurrent onNotificationPosted calls for the same notification key,
+    // preventing race conditions that create duplicate server entries.
+    private val keyMutexes = ConcurrentHashMap<String, Mutex>()
+    private fun mutexFor(key: String) = keyMutexes.computeIfAbsent(key) { Mutex() }
+
     private val refreshReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             Log.i(TAG, "Manual refresh requested")
             scope.launch { fullSync() }
+        }
+    }
+
+    private val fcmReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val serverId = intent.getStringExtra(FcmService.EXTRA_SERVER_ID) ?: return
+            when (intent.action) {
+                FcmService.ACTION_FCM_DISMISS -> {
+                    val notificationKey = settings.getNotificationKeyByServerId(serverId) ?: return
+                    Log.d(TAG, "FCM dismiss for server entry $serverId")
+                    settings.removeNotificationMapping(notificationKey)
+                    try { cancelNotification(notificationKey) } catch (e: Exception) {
+                        Log.e(TAG, "Failed to cancel notification: ${e.message}")
+                    }
+                }
+                FcmService.ACTION_FCM_ACTION -> {
+                    val actionTaken = intent.getStringExtra(FcmService.EXTRA_ACTION_TAKEN) ?: return
+                    val notificationKey = settings.getNotificationKeyByServerId(serverId) ?: return
+                    Log.d(TAG, "FCM action '$actionTaken' for server entry $serverId")
+                    fireAction(notificationKey, actionTaken)
+                    settings.removeNotificationMapping(notificationKey)
+                    scope.launch {
+                        try { apiClient.deleteNotification(settings.endpoint, settings.userId, serverId) }
+                        catch (_: Exception) {}
+                    }
+                }
+            }
         }
     }
 
@@ -45,12 +97,18 @@ class NotificationSyncService : NotificationListenerService() {
         settings = SettingsManager(this)
         apiClient = ApiClient()
         registerReceiver(refreshReceiver, IntentFilter(ACTION_REFRESH), RECEIVER_NOT_EXPORTED)
+        val fcmFilter = IntentFilter().apply {
+            addAction(FcmService.ACTION_FCM_DISMISS)
+            addAction(FcmService.ACTION_FCM_ACTION)
+        }
+        registerReceiver(fcmReceiver, fcmFilter, RECEIVER_NOT_EXPORTED)
         Log.i(TAG, "NotificationSyncService started")
     }
 
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(refreshReceiver)
+        unregisterReceiver(fcmReceiver)
         job.cancel()
         Log.i(TAG, "NotificationSyncService stopped")
     }
@@ -61,19 +119,50 @@ class NotificationSyncService : NotificationListenerService() {
         Log.i(TAG, "Listener connected — syncing active notifications")
         scope.launch { fullSync() }
         scope.launch { pollServerDismissals() }
+        registerFcmToken()
+    }
+
+    private fun registerFcmToken() {
+        FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+            scope.launch {
+                val error = apiClient.registerFcmToken(settings.endpoint, settings.userId, token)
+                if (error == null) {
+                    settings.fcmToken = token
+                    Log.i(TAG, "FCM token registered with server")
+                } else {
+                    Log.e(TAG, "Failed to register FCM token: $error")
+                }
+            }
+        }.addOnFailureListener { e ->
+            Log.e(TAG, "Failed to get FCM token: ${e.message}")
+        }
     }
 
     private suspend fun fullSync() {
         val active = try { activeNotifications } catch (e: Exception) { null } ?: return
-        val activeKeys = active.map { it.key }.toSet()
 
-        // Delete all existing server mappings and re-post everything fresh
+        // Delete all locally-known server entries
         val localMappings = settings.getAllMappings()
         for ((notificationKey, serverId) in localMappings) {
             try {
                 apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
             } catch (_: Exception) {}
             settings.removeNotificationMapping(notificationKey)
+        }
+
+        // Also purge any server-side orphans not present in local mappings
+        // (e.g. created before a crash that prevented storeNotificationMapping from running)
+        val knownServerIds = localMappings.values.toSet()
+        val serverNotifications = apiClient.getNotifications(settings.endpoint, settings.userId)
+        if (serverNotifications != null) {
+            for (serverNotif in serverNotifications) {
+                if (serverNotif.id !in knownServerIds) {
+                    try {
+                        apiClient.deleteNotification(settings.endpoint, settings.userId, serverNotif.id)
+                        Log.d(TAG, "Purged orphaned server entry ${serverNotif.id}")
+                    } catch (_: Exception) {}
+                }
+            }
         }
 
         // Post all currently active notifications
@@ -85,30 +174,30 @@ class NotificationSyncService : NotificationListenerService() {
     }
 
     private suspend fun pollServerDismissals() {
+        // Kept as a safety-net fallback in case FCM messages are dropped
+        // (e.g. device was offline for an extended period).
         while (scope.isActive) {
             delay(10_000)
             if (!settings.isConfigured) continue
 
             val serverNotifications = apiClient.getNotifications(settings.endpoint, settings.userId) ?: continue
             val serverIds = serverNotifications.map { it.id }.toSet()
-            val localMappings = settings.getAllMappings() // notificationKey -> serverId
+            val localMappings = settings.getAllMappings()
 
             for ((notificationKey, serverId) in localMappings) {
                 val serverNotif = serverNotifications.find { it.id == serverId }
 
                 when {
-                    // Notification no longer exists on server — dismiss locally
                     serverNotif == null -> {
-                        Log.d(TAG, "Server dismissed $serverId — cancelling local notification")
+                        Log.d(TAG, "Fallback poll: server dismissed $serverId — cancelling local notification")
                         settings.removeNotificationMapping(notificationKey)
                         try { cancelNotification(notificationKey) } catch (e: Exception) {
                             Log.e(TAG, "Failed to cancel notification: ${e.message}")
                         }
                     }
 
-                    // Action was taken on server — fire the action locally then clean up
                     serverNotif.actionTaken != null -> {
-                        Log.d(TAG, "Action '${serverNotif.actionTaken}' requested for $serverId")
+                        Log.d(TAG, "Fallback poll: action '${serverNotif.actionTaken}' requested for $serverId")
                         fireAction(notificationKey, serverNotif.actionTaken)
                         settings.removeNotificationMapping(notificationKey)
                         try {
@@ -121,15 +210,27 @@ class NotificationSyncService : NotificationListenerService() {
     }
 
     /**
-     * Fires the notification action whose title matches [actionTitle].
+     * Fires the notification action matching [actionTitle].
+     *
+     * Matching priority:
+     * 1. Exact title match (case-insensitive)
+     * 2. [actionTitle] parsed as a semantic action integer (e.g. "8" → THUMBS_UP)
+     * 3. Keyword/emoji alias mapped to a semantic action (e.g. "like" or "👍" → THUMBS_UP)
+     *
      * Falls back to cancelling the notification if no matching action is found.
      */
     private fun fireAction(notificationKey: String, actionTitle: String) {
         val sbn = try { activeNotifications?.find { it.key == notificationKey } } catch (_: Exception) { null }
         if (sbn != null) {
-            val action = sbn.notification.actions?.find {
-                it.title?.toString().equals(actionTitle, ignoreCase = true)
-            }
+            val actions = sbn.notification.actions
+            val action = actions?.find { it.title?.toString().equals(actionTitle, ignoreCase = true) }
+                ?: actionTitle.toIntOrNull()?.let { semanticInt ->
+                    actions?.find { it.semanticAction == semanticInt }
+                }
+                ?: SEMANTIC_ACTION_ALIASES[actionTitle.trim().lowercase()]?.let { semanticInt ->
+                    actions?.find { it.semanticAction == semanticInt }
+                }
+
             if (action?.actionIntent != null) {
                 try {
                     action.actionIntent.send()
@@ -149,15 +250,17 @@ class NotificationSyncService : NotificationListenerService() {
         if (!settings.isConfigured) return
         if (sbn.packageName == packageName) return
         scope.launch {
-            val existingServerId = settings.getNotificationServerId(sbn.key)
-            if (existingServerId != null) {
-                // Notification was updated — delete old server entry and re-post with fresh content
-                try {
-                    apiClient.deleteNotification(settings.endpoint, settings.userId, existingServerId)
-                } catch (_: Exception) {}
-                settings.removeNotificationMapping(sbn.key)
+            mutexFor(sbn.key).withLock {
+                val existingServerId = settings.getNotificationServerId(sbn.key)
+                if (existingServerId != null) {
+                    // Notification was updated — delete old server entry and re-post with fresh content
+                    try {
+                        apiClient.deleteNotification(settings.endpoint, settings.userId, existingServerId)
+                    } catch (_: Exception) {}
+                    settings.removeNotificationMapping(sbn.key)
+                }
+                postSbn(sbn)
             }
-            postSbn(sbn)
         }
     }
 
