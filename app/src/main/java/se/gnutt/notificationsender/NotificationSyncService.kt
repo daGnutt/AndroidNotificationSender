@@ -115,8 +115,10 @@ class NotificationSyncService : NotificationListenerService() {
         val appName = getAppName(sbn.packageName)
         val iconBase64 = getAppIconBase64(sbn.packageName)
         val actions = sbn.notification.actions
-            ?.filter { it.semanticAction != android.app.Notification.Action.SEMANTIC_ACTION_NONE }
-            ?.map { Pair(it.semanticAction, it.title?.toString().orEmpty()) }
+            ?.mapNotNull { action ->
+                val title = action.title?.toString().orEmpty()
+                if (title.isBlank()) null else Pair(action.semanticAction, title)
+            }
             ?.takeIf { it.isNotEmpty() }
         try {
             val serverId = apiClient.postNotification(
