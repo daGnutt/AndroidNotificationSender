@@ -16,5 +16,8 @@ local.properties
 # Signing keystore — keep release.jks out of version control
 release.jks
 
+# Firebase config — contains API keys, do not commit
+app/google-services.json
+
 # OS
 Thumbs.db
