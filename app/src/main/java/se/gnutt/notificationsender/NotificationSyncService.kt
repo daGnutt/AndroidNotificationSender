@@ -86,21 +86,61 @@ class NotificationSyncService : NotificationListenerService() {
         while (scope.isActive) {
             delay(10_000)
             if (!settings.isConfigured) continue
-            val serverIds = apiClient.getNotificationIds(settings.endpoint, settings.userId) ?: continue
+
+            val serverNotifications = apiClient.getNotifications(settings.endpoint, settings.userId) ?: continue
+            val serverIds = serverNotifications.map { it.id }.toSet()
             val localMappings = settings.getAllMappings() // notificationKey -> serverId
+
             for ((notificationKey, serverId) in localMappings) {
-                if (serverId !in serverIds) {
-                    Log.d(TAG, "Server dismissed $serverId — cancelling local notification")
-                    // Remove mapping first so onNotificationRemoved won't re-delete from server
-                    settings.removeNotificationMapping(notificationKey)
-                    try {
-                        cancelNotification(notificationKey)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to cancel notification: ${e.message}")
+                val serverNotif = serverNotifications.find { it.id == serverId }
+
+                when {
+                    // Notification no longer exists on server — dismiss locally
+                    serverNotif == null -> {
+                        Log.d(TAG, "Server dismissed $serverId — cancelling local notification")
+                        settings.removeNotificationMapping(notificationKey)
+                        try { cancelNotification(notificationKey) } catch (e: Exception) {
+                            Log.e(TAG, "Failed to cancel notification: ${e.message}")
+                        }
+                    }
+
+                    // Action was taken on server — fire the action locally then clean up
+                    serverNotif.actionTaken != null -> {
+                        Log.d(TAG, "Action '${serverNotif.actionTaken}' requested for $serverId")
+                        fireAction(notificationKey, serverNotif.actionTaken)
+                        settings.removeNotificationMapping(notificationKey)
+                        try {
+                            apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
+                        } catch (_: Exception) {}
                     }
                 }
             }
         }
+    }
+
+    /**
+     * Fires the notification action whose title matches [actionTitle].
+     * Falls back to cancelling the notification if no matching action is found.
+     */
+    private fun fireAction(notificationKey: String, actionTitle: String) {
+        val sbn = try { activeNotifications?.find { it.key == notificationKey } } catch (_: Exception) { null }
+        if (sbn != null) {
+            val action = sbn.notification.actions?.find {
+                it.title?.toString().equals(actionTitle, ignoreCase = true)
+            }
+            if (action?.actionIntent != null) {
+                try {
+                    action.actionIntent.send()
+                    Log.d(TAG, "Fired action '${action.title}' for ${sbn.packageName}")
+                    return
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to fire action PendingIntent: ${e.message}")
+                }
+            }
+        }
+        // Fallback: just dismiss the notification
+        Log.d(TAG, "No matching action found for '$actionTitle' — dismissing notification")
+        try { cancelNotification(notificationKey) } catch (_: Exception) {}
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {

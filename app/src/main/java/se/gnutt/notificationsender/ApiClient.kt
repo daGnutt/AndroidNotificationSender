@@ -91,9 +91,9 @@ class ApiClient {
     }
 
     /**
-     * GET /api/notifications — returns the set of notification IDs currently on the server.
+     * GET /api/notifications — returns full notification objects from the server.
      */
-    fun getNotificationIds(endpoint: String, userId: String): Set<String>? {
+    fun getNotifications(endpoint: String, userId: String): List<ServerNotification>? {
         return try {
             val request = Request.Builder()
                 .url("$endpoint/api/notifications?userId=$userId")
@@ -102,12 +102,23 @@ class ApiClient {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return null
                 val array = org.json.JSONArray(response.body?.string() ?: return null)
-                (0 until array.length()).map { array.getJSONObject(it).getString("id") }.toSet()
+                (0 until array.length()).map { i ->
+                    val obj = array.getJSONObject(i)
+                    ServerNotification(
+                        id = obj.getString("id"),
+                        actionTaken = obj.optString("actionTaken").takeIf { it.isNotBlank() },
+                        actionResponse = obj.optString("actionResponse").takeIf { it.isNotBlank() }
+                    )
+                }
             }
         } catch (e: Exception) {
             null
         }
     }
+
+    @Deprecated("Use getNotifications()", replaceWith = ReplaceWith("getNotifications(endpoint, userId)"))
+    fun getNotificationIds(endpoint: String, userId: String): Set<String>? =
+        getNotifications(endpoint, userId)?.map { it.id }?.toSet()
 
     /**
      * GET /api/users/:userId — validates that the userId exists on the server.
@@ -128,3 +139,9 @@ class ApiClient {
         }
     }
 }
+
+data class ServerNotification(
+    val id: String,
+    val actionTaken: String?,
+    val actionResponse: String?
+)
