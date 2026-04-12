@@ -1,0 +1,20 @@
+# Built artifacts
+build/
+app/build/
+.gradle/
+
+# Local configuration (machine-specific SDK paths)
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+
+# Signing keystore — keep release.jks out of version control
+release.jks
+
+# OS
+Thumbs.db
