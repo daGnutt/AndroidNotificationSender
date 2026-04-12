@@ -177,7 +177,7 @@ class NotificationSyncService : NotificationListenerService() {
         // Kept as a safety-net fallback in case FCM messages are dropped
         // (e.g. device was offline for an extended period).
         while (scope.isActive) {
-            delay(300_000) // 5 minutes
+            delay(10_000)
             if (!settings.isConfigured) continue
 
             val serverNotifications = apiClient.getNotifications(settings.endpoint, settings.userId) ?: continue
