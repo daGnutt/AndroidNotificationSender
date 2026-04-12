@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Base64
@@ -16,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 
 class NotificationSyncService : NotificationListenerService() {
@@ -229,13 +231,21 @@ class NotificationSyncService : NotificationListenerService() {
         }
     }
 
-    private fun getAppIconBase64(packageName: String): String? {
-        return try {
+    private suspend fun getAppIconBase64(packageName: String): String? = withContext(Dispatchers.Main) {
+        try {
             val drawable = packageManager.getApplicationIcon(packageName)
-            val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
+            val size = 96
+            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
-            drawable.setBounds(0, 0, 96, 96)
-            drawable.draw(canvas)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                drawable is android.graphics.drawable.AdaptiveIconDrawable) {
+                // Draw background and foreground layers separately
+                drawable.background?.apply { setBounds(0, 0, size, size); draw(canvas) }
+                drawable.foreground?.apply { setBounds(0, 0, size, size); draw(canvas) }
+            } else {
+                drawable.setBounds(0, 0, size, size)
+                drawable.draw(canvas)
+            }
             val stream = ByteArrayOutputStream()
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
             Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
