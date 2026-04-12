@@ -269,7 +269,24 @@ class NotificationSyncService : NotificationListenerService() {
         val title = extras.getCharSequence("android.title")?.toString().orEmpty()
         val text = extras.getCharSequence("android.text")?.toString().orEmpty()
         val bigText = extras.getCharSequence("android.bigText")?.toString()
-        val body = bigText?.takeIf { it.isNotBlank() } ?: text
+
+        // MessagingStyle notifications (e.g. Messenger, WhatsApp) store the full
+        // message history in android.messages as an array of Bundles. Extract and
+        // format all messages so the web UI sees the full conversation, not just the
+        // latest line.
+        val messagesArray = extras.getParcelableArray("android.messages")
+        val body = if (!messagesArray.isNullOrEmpty()) {
+            messagesArray.mapNotNull { item ->
+                val bundle = item as? android.os.Bundle ?: return@mapNotNull null
+                val msgText = bundle.getCharSequence("text")?.toString()?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                val sender = bundle.getCharSequence("sender")
+                    ?: bundle.getBundle("sender_person")?.getCharSequence("name")
+                if (sender != null) "$sender: $msgText" else msgText
+            }.joinToString("\n")
+        } else {
+            bigText?.takeIf { it.isNotBlank() } ?: text
+        }
         val appName = getAppName(sbn.packageName)
         val iconBase64 = getAppIconBase64(sbn.packageName)
         val actions = sbn.notification.actions
