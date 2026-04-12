@@ -10,4 +10,5 @@
     <string name="checking_status">Checking notification listener status…</string>
     <string name="qr_scan_hint">Point camera at the QR code from the web interface</string>
     <string name="btn_scan_qr">Scan QR Code</string>
+    <string name="btn_refresh">Refresh Notifications on Backend</string>
 </resources>

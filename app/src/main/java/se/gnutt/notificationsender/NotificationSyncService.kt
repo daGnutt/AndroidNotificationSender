@@ -1,5 +1,9 @@
 package se.gnutt.notificationsender
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.service.notification.NotificationListenerService
@@ -18,6 +22,7 @@ class NotificationSyncService : NotificationListenerService() {
 
     companion object {
         private const val TAG = "NotificationSync"
+        const val ACTION_REFRESH = "se.gnutt.notificationsender.REFRESH_NOTIFICATIONS"
     }
 
     private val job = SupervisorJob()
@@ -26,15 +31,24 @@ class NotificationSyncService : NotificationListenerService() {
     private lateinit var settings: SettingsManager
     private lateinit var apiClient: ApiClient
 
+    private val refreshReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.i(TAG, "Manual refresh requested")
+            scope.launch { fullSync() }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         settings = SettingsManager(this)
         apiClient = ApiClient()
+        registerReceiver(refreshReceiver, IntentFilter(ACTION_REFRESH), RECEIVER_NOT_EXPORTED)
         Log.i(TAG, "NotificationSyncService started")
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterReceiver(refreshReceiver)
         job.cancel()
         Log.i(TAG, "NotificationSyncService stopped")
     }
@@ -43,30 +57,29 @@ class NotificationSyncService : NotificationListenerService() {
         super.onListenerConnected()
         if (!settings.isConfigured) return
         Log.i(TAG, "Listener connected — syncing active notifications")
-        scope.launch {
-            val active = try { activeNotifications } catch (e: Exception) { null } ?: return@launch
-            val activeKeys = active.map { it.key }.toSet()
-
-            // Delete server entries whose notification is no longer on the phone
-            val localMappings = settings.getAllMappings()
-            for ((notificationKey, serverId) in localMappings) {
-                if (notificationKey !in activeKeys) {
-                    Log.d(TAG, "Cleaning up orphaned server entry $serverId")
-                    try {
-                        apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
-                    } catch (_: Exception) {}
-                    settings.removeNotificationMapping(notificationKey)
-                }
-            }
-
-            // Post active notifications not yet tracked
-            for (sbn in active) {
-                if (sbn.packageName == packageName) continue
-                if (settings.getNotificationServerId(sbn.key) != null) continue
-                postSbn(sbn)
-            }
-        }
+        scope.launch { fullSync() }
         scope.launch { pollServerDismissals() }
+    }
+
+    private suspend fun fullSync() {
+        val active = try { activeNotifications } catch (e: Exception) { null } ?: return
+        val activeKeys = active.map { it.key }.toSet()
+
+        // Delete all existing server mappings and re-post everything fresh
+        val localMappings = settings.getAllMappings()
+        for ((notificationKey, serverId) in localMappings) {
+            try {
+                apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
+            } catch (_: Exception) {}
+            settings.removeNotificationMapping(notificationKey)
+        }
+
+        // Post all currently active notifications
+        for (sbn in active) {
+            if (sbn.packageName == packageName) continue
+            postSbn(sbn)
+        }
+        Log.i(TAG, "Full sync complete — posted ${active.count { it.packageName != packageName }} notifications")
     }
 
     private suspend fun pollServerDismissals() {

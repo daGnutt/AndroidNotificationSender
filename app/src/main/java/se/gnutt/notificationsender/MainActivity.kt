@@ -24,6 +24,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnScanQr: Button
     private lateinit var btnSave: Button
     private lateinit var btnGrantPermission: Button
+    private lateinit var btnRefresh: Button
     private lateinit var tvSaveStatus: TextView
     private lateinit var tvListenerStatus: TextView
 
@@ -50,6 +51,7 @@ class MainActivity : AppCompatActivity() {
         btnScanQr = findViewById(R.id.btnScanQr)
         btnSave = findViewById(R.id.btnSave)
         btnGrantPermission = findViewById(R.id.btnGrantPermission)
+        btnRefresh = findViewById(R.id.btnRefresh)
         tvSaveStatus = findViewById(R.id.tvSaveStatus)
         tvListenerStatus = findViewById(R.id.tvListenerStatus)
 
@@ -62,6 +64,17 @@ class MainActivity : AppCompatActivity() {
             qrLauncher.launch(Intent(this, QrScanActivity::class.java))
         }
         btnSave.setOnClickListener { saveAndVerify() }
+
+        btnRefresh.setOnClickListener {
+            sendBroadcast(Intent(NotificationSyncService.ACTION_REFRESH).setPackage(packageName))
+            btnRefresh.isEnabled = false
+            btnRefresh.text = "Refreshing…"
+            uiScope.launch {
+                kotlinx.coroutines.delay(3000)
+                btnRefresh.isEnabled = true
+                btnRefresh.text = getString(R.string.btn_refresh)
+            }
+        }
 
         btnGrantPermission.setOnClickListener {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))

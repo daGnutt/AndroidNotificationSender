@@ -112,5 +112,14 @@
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:visibility="gone" />
 
+        <!-- Refresh button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnRefresh"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/btn_refresh"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_marginTop="12dp" />
+
     </LinearLayout>
 </ScrollView>
