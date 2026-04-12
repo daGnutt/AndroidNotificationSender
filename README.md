@@ -2,8 +2,7 @@
 
 An Android app that keeps your phone's notifications in sync with a web service. Notifications appear on the web as they arrive, and dismissing them on either side dismisses them on the other.
 
-**Backend project:** [daGnutt/WebNotifications](https://github.com/daGnutt/WebNotifications)  
-
+**Backend project:** [daGnutt/WebNotifications](https://github.com/daGnutt/WebNotifications)
 
 ---
 

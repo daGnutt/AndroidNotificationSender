@@ -68,7 +68,7 @@ Parsed in `QrScanActivity.parseAndReturn()`, returned via `Intent` extras to `Ma
 
 ## API Summary
 
-Live server: ``
+Live server: configured by the user at setup time
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
