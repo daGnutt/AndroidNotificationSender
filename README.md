@@ -11,7 +11,7 @@ An Android app that keeps your phone's notifications in sync with a web service.
 - **Phone → server:** Every new notification is posted to the API with title, body, app name, icon, semantic actions (Reply, Mark as Read, etc.), and a `isSilent` flag indicating whether the notification channel has no sound/vibration
 - **Server → phone:** Notifications dismissed via the web interface are cancelled on the phone (via FCM push or 10-second poll fallback)
 - **Orphan cleanup:** Every 10 seconds, any server entry whose notification is no longer active on the phone is automatically deleted (phone is the source of truth)
-- **Actions from web:** Tapping an action (e.g. Like, Reply) in the web UI fires the corresponding Android notification action on the phone, including reply text for RemoteInput-based reply actions
+- **Actions from web:** Tapping an action (e.g. Like, Reply) in the web UI fires the corresponding Android notification action on the phone, including reply text for RemoteInput-based reply actions. The notification is left on the device afterwards — the source app updates or dismisses it as appropriate (e.g. Teams replaces it with a sent receipt)
 - **Phone → server dismissal:** Swiping away a notification on the phone removes it from the server
 - **Startup sync:** On connect, orphaned server entries are cleaned up and any active notifications not yet tracked are posted
 - **QR code setup:** Scan a QR code from the web interface to configure endpoint and user ID instantly

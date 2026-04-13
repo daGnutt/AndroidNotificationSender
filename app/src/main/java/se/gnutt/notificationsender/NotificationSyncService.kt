@@ -234,12 +234,14 @@ class NotificationSyncService : NotificationListenerService() {
      * Fires the notification action matching [actionTitle], optionally supplying [actionResponse]
      * as reply text for actions that have RemoteInput slots (e.g. "Reply").
      *
+     * The notification is left on the device after the action fires — the source app is
+     * responsible for updating or dismissing it (e.g. Teams replaces it with a sent receipt).
+     * The notification is only cancelled if no matching action can be found.
+     *
      * Matching priority:
      * 1. Exact title match (case-insensitive)
      * 2. [actionTitle] parsed as a semantic action integer (e.g. "8" → THUMBS_UP)
      * 3. Keyword/emoji alias mapped to a semantic action (e.g. "like" or "👍" → THUMBS_UP)
-     *
-     * Falls back to cancelling the notification if no matching action is found.
      */
     private fun fireAction(notificationKey: String, actionTitle: String, actionResponse: String? = null) {
         val sbn = try { activeNotifications?.find { it.key == notificationKey } } catch (_: Exception) { null }
@@ -270,14 +272,15 @@ class NotificationSyncService : NotificationListenerService() {
                         action.actionIntent.send()
                     }
                     Log.d(TAG, "Fired action '${action.title}' for ${sbn.packageName}")
-                    try { cancelNotification(notificationKey) } catch (_: Exception) {}
+                    // Do not cancel the notification — the source app will update or dismiss
+                    // it as appropriate (e.g. Teams updates the notification after a reply).
                     return
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to fire action PendingIntent: ${e.message}")
                 }
             }
         }
-        // Fallback: just dismiss the notification
+        // Fallback: no matching action found — dismiss the notification
         Log.d(TAG, "No matching action found for '$actionTitle' — dismissing notification")
         try { cancelNotification(notificationKey) } catch (_: Exception) {}
     }
