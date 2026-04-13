@@ -9,7 +9,9 @@ An Android app that keeps your phone's notifications in sync with a web service.
 ## Features
 
 - **Phone → server:** Every new notification is posted to the API with title, body, app name, icon, semantic actions (Reply, Mark as Read, etc.), and a `isSilent` flag indicating whether the notification channel has no sound/vibration
-- **Server → phone:** Notifications deleted via the web interface are dismissed on the phone within ~10 seconds
+- **Server → phone:** Notifications dismissed via the web interface are cancelled on the phone (via FCM push or 10-second poll fallback)
+- **Orphan cleanup:** Every 10 seconds, any server entry whose notification is no longer active on the phone is automatically deleted (phone is the source of truth)
+- **Actions from web:** Tapping an action (e.g. Like, Reply) in the web UI fires the corresponding Android notification action on the phone, including reply text for RemoteInput-based reply actions
 - **Phone → server dismissal:** Swiping away a notification on the phone removes it from the server
 - **Startup sync:** On connect, orphaned server entries are cleaned up and any active notifications not yet tracked are posted
 - **QR code setup:** Scan a QR code from the web interface to configure endpoint and user ID instantly
@@ -111,10 +113,11 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 |--------|------|---------|
 | `POST` | `/api/notifications` | Post a notification |
 | `DELETE` | `/api/notifications/:id` | Remove a notification |
-| `GET` | `/api/notifications` | Poll for server-side dismissals |
+| `GET` | `/api/notifications` | Poll for server-side dismissals/actions (fallback) |
 | `GET` | `/api/users/:userId` | Verify user on setup |
+| `POST` | `/api/device-tokens` | Register FCM token for push delivery |
 
-See [API_DOCS.md](API_DOCS.md) for the full API reference.
+The server sends FCM data messages to the phone when a notification is dismissed or an action is taken via the web UI — see [API_DOCS.md](API_DOCS.md) for the message format.
 
 ---
 

@@ -1,6 +1,7 @@
 package se.gnutt.notificationsender
 
 import android.app.NotificationManager
+import android.app.RemoteInput
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -8,6 +9,7 @@ import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Build
+import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Base64
@@ -81,13 +83,15 @@ class NotificationSyncService : NotificationListenerService() {
                 FcmService.ACTION_FCM_ACTION -> {
                     val actionTaken = intent.getStringExtra(FcmService.EXTRA_ACTION_TAKEN) ?: return
                     val notificationKey = settings.getNotificationKeyByServerId(serverId) ?: return
+                    val actionResponse = intent.getStringExtra(FcmService.EXTRA_ACTION_RESPONSE)
                     Log.d(TAG, "FCM action '$actionTaken' for server entry $serverId")
-                    fireAction(notificationKey, actionTaken)
+                    // Remove mapping before firing/cancelling so onNotificationRemoved exits early
                     settings.removeNotificationMapping(notificationKey)
                     scope.launch {
                         try { apiClient.deleteNotification(settings.endpoint, settings.userId, serverId) }
                         catch (_: Exception) {}
                     }
+                    fireAction(notificationKey, actionTaken, actionResponse)
                 }
             }
         }
@@ -188,6 +192,7 @@ class NotificationSyncService : NotificationListenerService() {
 
             val serverNotifications = apiClient.getNotifications(settings.endpoint, settings.userId) ?: continue
             val localMappings = settings.getAllMappings()
+            val activeKeys = try { activeNotifications?.map { it.key }?.toSet() } catch (_: Exception) { null }
 
             for ((notificationKey, serverId) in localMappings) {
                 val serverNotif = serverNotifications.find { it.id == serverId }
@@ -203,7 +208,18 @@ class NotificationSyncService : NotificationListenerService() {
 
                     serverNotif.actionTaken != null -> {
                         Log.d(TAG, "Fallback poll: action '${serverNotif.actionTaken}' requested for $serverId")
-                        fireAction(notificationKey, serverNotif.actionTaken)
+                        // Remove mapping before firing/cancelling so onNotificationRemoved exits early
+                        settings.removeNotificationMapping(notificationKey)
+                        try {
+                            apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
+                        } catch (_: Exception) {}
+                        fireAction(notificationKey, serverNotif.actionTaken, serverNotif.actionResponse)
+                    }
+
+                    // Phone is the source of truth: if the notification is no longer active
+                    // on the device, delete the orphaned server entry.
+                    activeKeys != null && notificationKey !in activeKeys -> {
+                        Log.d(TAG, "Fallback poll: notification $notificationKey gone from phone — deleting server entry $serverId")
                         settings.removeNotificationMapping(notificationKey)
                         try {
                             apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
@@ -215,7 +231,8 @@ class NotificationSyncService : NotificationListenerService() {
     }
 
     /**
-     * Fires the notification action matching [actionTitle].
+     * Fires the notification action matching [actionTitle], optionally supplying [actionResponse]
+     * as reply text for actions that have RemoteInput slots (e.g. "Reply").
      *
      * Matching priority:
      * 1. Exact title match (case-insensitive)
@@ -224,7 +241,7 @@ class NotificationSyncService : NotificationListenerService() {
      *
      * Falls back to cancelling the notification if no matching action is found.
      */
-    private fun fireAction(notificationKey: String, actionTitle: String) {
+    private fun fireAction(notificationKey: String, actionTitle: String, actionResponse: String? = null) {
         val sbn = try { activeNotifications?.find { it.key == notificationKey } } catch (_: Exception) { null }
         if (sbn != null) {
             val actions = sbn.notification.actions
@@ -238,8 +255,22 @@ class NotificationSyncService : NotificationListenerService() {
 
             if (action?.actionIntent != null) {
                 try {
-                    action.actionIntent.send()
+                    val remoteInputs = action.remoteInputs
+                    if (!remoteInputs.isNullOrEmpty() && actionResponse != null) {
+                        // Fill each RemoteInput slot with the response text and send via a fill-in Intent
+                        val results = Bundle()
+                        for (ri in remoteInputs) {
+                            results.putCharSequence(ri.resultKey, actionResponse)
+                        }
+                        val fillIn = Intent().apply {
+                            RemoteInput.addResultsToIntent(remoteInputs, this, results)
+                        }
+                        action.actionIntent.send(this, 0, fillIn)
+                    } else {
+                        action.actionIntent.send()
+                    }
                     Log.d(TAG, "Fired action '${action.title}' for ${sbn.packageName}")
+                    try { cancelNotification(notificationKey) } catch (_: Exception) {}
                     return
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to fire action PendingIntent: ${e.message}")
