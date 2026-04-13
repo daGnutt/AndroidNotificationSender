@@ -1,5 +1,6 @@
 package se.gnutt.notificationsender
 
+import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -293,6 +294,9 @@ class NotificationSyncService : NotificationListenerService() {
                 if (title.isBlank()) null else Pair(action.semanticAction, title)
             }
             ?.takeIf { it.isNotEmpty() }
+        val nm = getSystemService(NotificationManager::class.java)
+        val channel = sbn.notification.channelId?.let { nm.getNotificationChannel(it) }
+        val isSilent = channel?.importance?.let { it < NotificationManager.IMPORTANCE_DEFAULT } ?: false
         try {
             val serverId = apiClient.postNotification(
                 endpoint = settings.endpoint,
@@ -304,7 +308,8 @@ class NotificationSyncService : NotificationListenerService() {
                 appName = appName,
                 icon = iconBase64,
                 actions = actions,
-                messages = structuredMessages
+                messages = structuredMessages,
+                isSilent = isSilent
             )
             if (serverId != null) {
                 settings.storeNotificationMapping(sbn.key, serverId)

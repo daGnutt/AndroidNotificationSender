@@ -8,7 +8,7 @@ An Android app that keeps your phone's notifications in sync with a web service.
 
 ## Features
 
-- **Phone → server:** Every new notification is posted to the API with title, body, app name, icon, and semantic actions (Reply, Mark as Read, etc.)
+- **Phone → server:** Every new notification is posted to the API with title, body, app name, icon, semantic actions (Reply, Mark as Read, etc.), and a `isSilent` flag indicating whether the notification channel has no sound/vibration
 - **Server → phone:** Notifications deleted via the web interface are dismissed on the phone within ~10 seconds
 - **Phone → server dismissal:** Swiping away a notification on the phone removes it from the server
 - **Startup sync:** On connect, orphaned server entries are cleaned up and any active notifications not yet tracked are posted

@@ -127,13 +127,19 @@ Store a new notification and immediately fan out web-push messages to all push s
 
 **Request body**
 
-| Field       | Type   | Required | Description                                   |
-|-------------|--------|----------|-----------------------------------------------|
-| `userId`    | string | Yes      | User UUID                                     |
-| `title`     | string | No       | Notification title                            |
-| `body`      | string | No       | Notification body text                        |
-| `timestamp` | string | No       | ISO 8601 timestamp (auto-set if omitted)      |
-| `...`       | any    | No       | Any additional fields are stored in `data`    |
+| Field           | Type    | Required | Description                                        |
+|-----------------|---------|----------|----------------------------------------------------|
+| `userId`        | string  | Yes      | User UUID                                          |
+| `title`         | string  | No       | Notification title                                 |
+| `body`          | string  | No       | Notification body text                             |
+| `timestamp`     | string  | No       | ISO 8601 timestamp (auto-set if omitted)           |
+| `sourcePackage` | string  | No       | Android package name of the source app             |
+| `appName`       | string  | No       | Human-readable name of the source app              |
+| `icon`          | string  | No       | Base64-encoded PNG app icon                        |
+| `isSilent`      | boolean | No       | `true` if the notification channel importance is below `IMPORTANCE_DEFAULT` (no sound/vibration) |
+| `actions`       | array   | No       | List of `{ semanticAction, title }` action objects |
+| `messages`      | array   | No       | MessagingStyle messages: `{ sender?, text, timestamp, senderIcon? }` |
+| `...`           | any     | No       | Any additional fields are stored in `data`         |
 
 **Responses**
 
