@@ -151,24 +151,29 @@ class NotificationSyncService : NotificationListenerService() {
             settings.removeNotificationMapping(notificationKey)
         }
 
-        // Also purge any server-side orphans not present in local mappings
-        // (e.g. created before a crash that prevented storeNotificationMapping from running)
-        val knownServerIds = localMappings.values.toSet()
+        // Purge any remaining server entries — this catches both entries whose delete
+        // failed above (network error) and true orphans from a previous crash where
+        // storeNotificationMapping never ran.
         val serverNotifications = apiClient.getNotifications(settings.endpoint, settings.userId)
         if (serverNotifications != null) {
             for (serverNotif in serverNotifications) {
-                if (serverNotif.id !in knownServerIds) {
-                    try {
-                        apiClient.deleteNotification(settings.endpoint, settings.userId, serverNotif.id)
-                        Log.d(TAG, "Purged orphaned server entry ${serverNotif.id}")
-                    } catch (_: Exception) {}
-                }
+                try {
+                    apiClient.deleteNotification(settings.endpoint, settings.userId, serverNotif.id)
+                    Log.d(TAG, "Purged server entry ${serverNotif.id}")
+                } catch (_: Exception) {}
             }
         }
+
+        // Re-snapshot active notifications immediately before posting to avoid a race
+        // where a notification in the earlier snapshot has since been dismissed: in that
+        // case onNotificationRemoved would see no mapping and exit early, leaving the
+        // freshly-posted server entry orphaned.
+        val currentActiveKeys = try { activeNotifications?.map { it.key }?.toSet() } catch (_: Exception) { null }
 
         // Post all currently active notifications
         for (sbn in active) {
             if (sbn.packageName == packageName) continue
+            if (currentActiveKeys != null && sbn.key !in currentActiveKeys) continue
             postSbn(sbn)
         }
         Log.i(TAG, "Full sync complete — posted ${active.count { it.packageName != packageName }} notifications")
@@ -182,7 +187,6 @@ class NotificationSyncService : NotificationListenerService() {
             if (!settings.isConfigured) continue
 
             val serverNotifications = apiClient.getNotifications(settings.endpoint, settings.userId) ?: continue
-            val serverIds = serverNotifications.map { it.id }.toSet()
             val localMappings = settings.getAllMappings()
 
             for ((notificationKey, serverId) in localMappings) {
