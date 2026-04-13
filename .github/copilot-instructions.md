@@ -17,12 +17,12 @@ export PATH=$JAVA_HOME/bin:$PATH
 
 **Install to connected phone:**
 ```bash
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+~/Android/Sdk/platform-tools/adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 If ADB can't find the device:
 ```bash
-adb kill-server && adb start-server
+~/Android/Sdk/platform-tools/adb kill-server && ~/Android/Sdk/platform-tools/adb start-server
 ```
 
 **Device serial:** `5A160DLCH005TM`  
@@ -47,6 +47,13 @@ App started (reconnect)     → onListenerConnected   → reconcile orphaned ent
 **`SettingsManager`** — SharedPreferences wrapper that stores endpoint, userId, and a JSON map of `sbn.key → serverId`. All map methods are `@Synchronized`. The JSON map is the single source of truth for which phone notifications have been synced to the server.
 
 **`ApiClient`** — pure OkHttp, no Android context. All methods are blocking (call on IO dispatcher). Returns `null`/`false` on failure rather than throwing.
+
+## Documentation
+
+**Always update documentation alongside code changes.** When modifying behaviour, adding features, or fixing bugs, update all relevant docs in the same commit:
+- `README.md` — user-facing features, architecture overview, API table
+- `API_DOCS.md` — API endpoint details
+- `.github/copilot-instructions.md` — conventions, architecture notes, key behaviours
 
 ## Key Conventions
 
