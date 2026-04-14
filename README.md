@@ -126,3 +126,4 @@ The server sends FCM data messages to the phone when a notification is dismissed
 - Android 8.0+ (API 26)
 - Notification listener permission
 - Camera permission (for QR scanning only)
+- `RECEIVE_SENSITIVE_NOTIFICATIONS` permission declared (enables unredacted content for sensitive notifications on Android 15+)
