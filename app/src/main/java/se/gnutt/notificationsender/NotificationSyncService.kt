@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Build
 import android.os.Bundle
+import android.os.Parcelable
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Base64
@@ -311,14 +312,25 @@ class NotificationSyncService : NotificationListenerService() {
 
         // MessagingStyle notifications (e.g. Messenger, WhatsApp) store the full
         // message history in android.messages as an array of Bundles.
-        val messagesArray = extras.getParcelableArray("android.messages")
+        // Use the typed API on API 33+ to avoid silent deserialization failures.
+        @Suppress("DEPRECATION")
+        val messagesArray: Array<out Parcelable>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            extras.getParcelableArray("android.messages", Bundle::class.java)
+        } else {
+            extras.getParcelableArray("android.messages")
+        }
         val structuredMessages: List<NotificationMessage>?
         val body: String
 
         if (!messagesArray.isNullOrEmpty()) {
             structuredMessages = messagesArray.mapNotNull { extractMessage(it) }
-            body = structuredMessages.joinToString("\n") { msg ->
-                if (msg.sender != null) "${msg.sender}: ${msg.text}" else msg.text
+            if (structuredMessages.isNotEmpty()) {
+                body = structuredMessages.joinToString("\n") { msg ->
+                    if (msg.sender != null) "${msg.sender}: ${msg.text}" else msg.text
+                }
+            } else {
+                // Parsing failed for all items — fall back to plain text fields
+                body = bigText?.takeIf { it.isNotBlank() } ?: text
             }
         } else {
             structuredMessages = null
