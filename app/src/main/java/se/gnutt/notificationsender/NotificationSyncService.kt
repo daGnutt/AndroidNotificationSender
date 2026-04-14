@@ -336,8 +336,30 @@ class NotificationSyncService : NotificationListenerService() {
             structuredMessages = null
             body = bigText?.takeIf { it.isNotBlank() } ?: text
         }
-        val appName = getAppName(sbn.packageName)
-        val iconBase64 = getAppIconBase64(sbn.packageName)
+        val appName = run {
+            val fresh = getAppName(sbn.packageName)
+            if (fresh != sbn.packageName) {
+                // Successfully resolved a human-readable name — update cache and use it
+                val cachedIcon = settings.getAppMeta(sbn.packageName)?.icon
+                settings.storeAppMeta(sbn.packageName, fresh, cachedIcon)
+                fresh
+            } else {
+                // Fell back to package name — prefer cached name if available
+                settings.getAppMeta(sbn.packageName)?.name ?: fresh
+            }
+        }
+        val iconBase64 = run {
+            val fresh = getAppIconBase64(sbn.packageName)
+            if (fresh != null) {
+                // Successfully rendered icon — update cache and use it
+                val cachedName = settings.getAppMeta(sbn.packageName)?.name ?: appName
+                settings.storeAppMeta(sbn.packageName, cachedName, fresh)
+                fresh
+            } else {
+                // Rendering failed — fall back to cached icon
+                settings.getAppMeta(sbn.packageName)?.icon
+            }
+        }
         val actions = sbn.notification.actions
             ?.mapNotNull { action ->
                 val title = action.title?.toString().orEmpty()

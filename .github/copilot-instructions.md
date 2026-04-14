@@ -44,7 +44,9 @@ Server entry deleted        → pollServerDismissals (10s loop) → cancelNotifi
 App started (reconnect)     → onListenerConnected   → reconcile orphaned entries + backfill active
 ```
 
-**`SettingsManager`** — SharedPreferences wrapper that stores endpoint, userId, and a JSON map of `sbn.key → serverId`. All map methods are `@Synchronized`. The JSON map is the single source of truth for which phone notifications have been synced to the server.
+**`SettingsManager`** — SharedPreferences wrapper that stores endpoint, userId, a JSON map of `sbn.key → serverId`, and an app metadata cache (`packageName → { name, icon }`). All map/cache methods are `@Synchronized`. The notification map is the single source of truth for which phone notifications have been synced to the server.
+
+**App metadata cache** — `SettingsManager` persists `appName` and `icon` (base64 PNG) per `packageName` via `storeAppMeta()` / `getAppMeta()`. In `postSbn()`, fresh values from the PackageManager are written to the cache on success; cached values are used as fallback when `getAppName()` falls back to the package name or `getAppIconBase64()` returns null. This ensures notifications are posted with correct display names and icons even during early service startup after a reinstall (when PackageManager rendering can silently fail).
 
 **`ApiClient`** — pure OkHttp, no Android context. All methods are blocking (call on IO dispatcher). Returns `null`/`false` on failure rather than throwing.
 
