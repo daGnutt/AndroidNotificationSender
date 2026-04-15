@@ -131,10 +131,6 @@ class ApiClient {
         }
     }
 
-    @Deprecated("Use getNotifications()", replaceWith = ReplaceWith("getNotifications(endpoint, userId)"))
-    fun getNotificationIds(endpoint: String, userId: String): Set<String>? =
-        getNotifications(endpoint, userId)?.map { it.id }?.toSet()
-
     /**
      * POST /api/device-tokens — registers or updates the FCM token for push delivery.
      * Returns null on success, or an error string on failure.
@@ -165,7 +161,7 @@ class ApiClient {
     fun validateUser(endpoint: String, userId: String): String? {
         return try {
             val request = Request.Builder()
-                .url("$endpoint/api/users/$userId?userId=$userId")
+                .url("$endpoint/api/users/$userId")
                 .get()
                 .build()
             client.newCall(request).execute().use { response ->

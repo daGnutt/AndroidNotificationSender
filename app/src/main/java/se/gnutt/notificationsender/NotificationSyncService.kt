@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
@@ -33,6 +35,7 @@ class NotificationSyncService : NotificationListenerService() {
     companion object {
         private const val TAG = "NotificationSync"
         const val ACTION_REFRESH = "se.gnutt.notificationsender.REFRESH_NOTIFICATIONS"
+        private const val ICON_SIZE = 96
 
         // Maps common action name aliases (including emoji) to Android semantic action integers.
         // See Notification.Action.SEMANTIC_ACTION_* constants.
@@ -86,13 +89,7 @@ class NotificationSyncService : NotificationListenerService() {
                     val notificationKey = settings.getNotificationKeyByServerId(serverId) ?: return
                     val actionResponse = intent.getStringExtra(FcmService.EXTRA_ACTION_RESPONSE)
                     Log.d(TAG, "FCM action '$actionTaken' for server entry $serverId")
-                    // Remove mapping before firing/cancelling so onNotificationRemoved exits early
-                    settings.removeNotificationMapping(notificationKey)
-                    scope.launch {
-                        try { apiClient.deleteNotification(settings.endpoint, settings.userId, serverId) }
-                        catch (_: Exception) {}
-                    }
-                    fireAction(notificationKey, actionTaken, actionResponse)
+                    scope.launch { handleActionRequest(notificationKey, serverId, actionTaken, actionResponse) }
                 }
             }
         }
@@ -209,12 +206,7 @@ class NotificationSyncService : NotificationListenerService() {
 
                     serverNotif.actionTaken != null -> {
                         Log.d(TAG, "Fallback poll: action '${serverNotif.actionTaken}' requested for $serverId")
-                        // Remove mapping before firing/cancelling so onNotificationRemoved exits early
-                        settings.removeNotificationMapping(notificationKey)
-                        try {
-                            apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
-                        } catch (_: Exception) {}
-                        fireAction(notificationKey, serverNotif.actionTaken, serverNotif.actionResponse)
+                        handleActionRequest(notificationKey, serverId, serverNotif.actionTaken, serverNotif.actionResponse)
                     }
 
                     // Phone is the source of truth: if the notification is no longer active
@@ -232,7 +224,22 @@ class NotificationSyncService : NotificationListenerService() {
     }
 
     /**
-     * Fires the notification action matching [actionTitle], optionally supplying [actionResponse]
+     * Removes the local mapping, deletes the server entry, and fires the action on the device.
+     * Called both from the FCM broadcast receiver and the fallback poll loop.
+     * Mapping is removed first so that the resulting onNotificationRemoved callback exits early.
+     */
+    private suspend fun handleActionRequest(
+        notificationKey: String,
+        serverId: String,
+        actionTaken: String,
+        actionResponse: String?
+    ) {
+        settings.removeNotificationMapping(notificationKey)
+        try { apiClient.deleteNotification(settings.endpoint, settings.userId, serverId) } catch (_: Exception) {}
+        fireAction(notificationKey, actionTaken, actionResponse)
+    }
+
+    /**
      * as reply text for actions that have RemoteInput slots (e.g. "Reply").
      *
      * The notification is left on the device after the action fires — the source app is
@@ -290,17 +297,19 @@ class NotificationSyncService : NotificationListenerService() {
         if (!settings.isConfigured) return
         if (sbn.packageName == packageName) return
         scope.launch {
-            mutexFor(sbn.key).withLock {
-                val existingServerId = settings.getNotificationServerId(sbn.key)
+            val key = sbn.key
+            mutexFor(key).withLock {
+                val existingServerId = settings.getNotificationServerId(key)
                 if (existingServerId != null) {
                     // Notification was updated — delete old server entry and re-post with fresh content
                     try {
                         apiClient.deleteNotification(settings.endpoint, settings.userId, existingServerId)
                     } catch (_: Exception) {}
-                    settings.removeNotificationMapping(sbn.key)
+                    settings.removeNotificationMapping(key)
                 }
                 postSbn(sbn)
             }
+            keyMutexes.remove(key)
         }
     }
 
@@ -394,7 +403,8 @@ class NotificationSyncService : NotificationListenerService() {
         }
     }
 
-    override fun onNotificationRemoved(sbn: StatusBarNotification) {        if (!settings.isConfigured) return
+    override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        if (!settings.isConfigured) return
 
         val notificationKey = sbn.key
         val serverId = settings.getNotificationServerId(notificationKey) ?: return
@@ -463,43 +473,36 @@ class NotificationSyncService : NotificationListenerService() {
         withContext(Dispatchers.Main) {
             try {
                 val drawable = icon.loadDrawable(this@NotificationSyncService) ?: return@withContext null
-                val size = 96
-                val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-                val canvas = Canvas(bitmap)
-                drawable.setBounds(0, 0, size, size)
-                drawable.draw(canvas)
-                val stream = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-                Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+                drawableToBase64(drawable)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to extract sender icon: ${e.message}")
                 null
             }
         }
 
-
     private suspend fun getAppIconBase64(packageName: String): String? = withContext(Dispatchers.Main) {
         try {
-            val drawable = packageManager.getApplicationIcon(packageName)
-            val size = 96
-            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bitmap)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-                drawable is android.graphics.drawable.AdaptiveIconDrawable) {
-                // Draw background and foreground layers separately
-                drawable.background?.apply { setBounds(0, 0, size, size); draw(canvas) }
-                drawable.foreground?.apply { setBounds(0, 0, size, size); draw(canvas) }
-            } else {
-                drawable.setBounds(0, 0, size, size)
-                drawable.draw(canvas)
-            }
-            val stream = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-            Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+            drawableToBase64(packageManager.getApplicationIcon(packageName))
         } catch (e: Exception) {
             Log.w(TAG, "Failed to get icon for $packageName: ${e.message}")
             null
         }
+    }
+
+    /** Renders [drawable] into a [ICON_SIZE]×[ICON_SIZE] bitmap and returns a Base64-encoded PNG. */
+    private fun drawableToBase64(drawable: Drawable): String {
+        val bitmap = Bitmap.createBitmap(ICON_SIZE, ICON_SIZE, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && drawable is AdaptiveIconDrawable) {
+            drawable.background?.apply { setBounds(0, 0, ICON_SIZE, ICON_SIZE); draw(canvas) }
+            drawable.foreground?.apply { setBounds(0, 0, ICON_SIZE, ICON_SIZE); draw(canvas) }
+        } else {
+            drawable.setBounds(0, 0, ICON_SIZE, ICON_SIZE)
+            drawable.draw(canvas)
+        }
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+        return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
     }
 }
 

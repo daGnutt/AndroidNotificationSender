@@ -3,6 +3,7 @@ package se.gnutt.notificationsender
 import android.app.Activity
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
@@ -11,6 +12,7 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,9 +26,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnScanQr: Button
     private lateinit var btnSave: Button
     private lateinit var btnGrantPermission: Button
+    private lateinit var btnGrantSmsPermission: Button
     private lateinit var btnRefresh: Button
     private lateinit var tvSaveStatus: TextView
     private lateinit var tvListenerStatus: TextView
+    private lateinit var tvSmsPermissionStatus: TextView
 
     private lateinit var settings: SettingsManager
     private val apiClient = ApiClient()
@@ -42,6 +46,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val smsPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        updateStatus()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -51,9 +59,11 @@ class MainActivity : AppCompatActivity() {
         btnScanQr = findViewById(R.id.btnScanQr)
         btnSave = findViewById(R.id.btnSave)
         btnGrantPermission = findViewById(R.id.btnGrantPermission)
+        btnGrantSmsPermission = findViewById(R.id.btnGrantSmsPermission)
         btnRefresh = findViewById(R.id.btnRefresh)
         tvSaveStatus = findViewById(R.id.tvSaveStatus)
         tvListenerStatus = findViewById(R.id.tvListenerStatus)
+        tvSmsPermissionStatus = findViewById(R.id.tvSmsPermissionStatus)
 
         settings = SettingsManager(this)
 
@@ -78,6 +88,10 @@ class MainActivity : AppCompatActivity() {
 
         btnGrantPermission.setOnClickListener {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
+
+        btnGrantSmsPermission.setOnClickListener {
+            smsPermissionLauncher.launch(android.Manifest.permission.RECEIVE_SMS)
         }
     }
 
@@ -128,6 +142,17 @@ class MainActivity : AppCompatActivity() {
             tvListenerStatus.text = "⚠ Notification access not granted — tap the button below"
             tvListenerStatus.setTextColor(getColor(android.R.color.holo_orange_dark))
             btnGrantPermission.visibility = View.VISIBLE
+        }
+
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECEIVE_SMS)
+                == PackageManager.PERMISSION_GRANTED) {
+            tvSmsPermissionStatus.text = getString(R.string.sms_permission_granted)
+            tvSmsPermissionStatus.setTextColor(getColor(android.R.color.holo_green_dark))
+            btnGrantSmsPermission.visibility = View.GONE
+        } else {
+            tvSmsPermissionStatus.text = getString(R.string.sms_permission_denied)
+            tvSmsPermissionStatus.setTextColor(getColor(android.R.color.holo_orange_dark))
+            btnGrantSmsPermission.visibility = View.VISIBLE
         }
     }
 

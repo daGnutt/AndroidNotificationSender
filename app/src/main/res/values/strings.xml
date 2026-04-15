@@ -7,6 +7,9 @@
     <string name="hint_user_id">User GUID</string>
     <string name="btn_save">Save &amp; Verify</string>
     <string name="btn_grant_permission">Grant Notification Access</string>
+    <string name="btn_grant_sms_permission">Grant SMS Permission</string>
+    <string name="sms_permission_granted">✓ SMS permission granted</string>
+    <string name="sms_permission_denied">⚠ SMS permission not granted — tap the button below</string>
     <string name="checking_status">Checking notification listener status…</string>
     <string name="qr_scan_hint">Point camera at the QR code from the web interface</string>
     <string name="btn_scan_qr">Scan QR Code</string>
