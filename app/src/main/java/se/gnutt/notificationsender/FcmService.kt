@@ -20,6 +20,9 @@ class FcmService : FirebaseMessagingService() {
         /** Broadcast to fire a notification action by server ID. */
         const val ACTION_FCM_ACTION = "se.gnutt.notificationsender.FCM_ACTION"
 
+        /** Broadcast to trigger a full resync of active notifications to the server. */
+        const val ACTION_FCM_RESYNC = "se.gnutt.notificationsender.FCM_RESYNC"
+
         const val EXTRA_SERVER_ID = "serverId"
         const val EXTRA_ACTION_TAKEN = "actionTaken"
         const val EXTRA_ACTION_RESPONSE = "actionResponse"
@@ -96,6 +99,13 @@ class FcmService : FirebaseMessagingService() {
                     putExtra(EXTRA_SERVER_ID, serverId)
                     putExtra(EXTRA_ACTION_TAKEN, actionTaken)
                     data["actionResponse"]?.let { putExtra(EXTRA_ACTION_RESPONSE, it) }
+                })
+            }
+
+            "resync" -> {
+                Log.i(TAG, "FCM resync requested — triggering full sync")
+                sendBroadcast(Intent(ACTION_FCM_RESYNC).apply {
+                    setPackage(packageName)
                 })
             }
 

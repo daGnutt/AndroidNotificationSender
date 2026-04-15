@@ -13,6 +13,7 @@ import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
+import android.provider.Telephony
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Base64
@@ -74,9 +75,9 @@ class NotificationSyncService : NotificationListenerService() {
 
     private val fcmReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            val serverId = intent.getStringExtra(FcmService.EXTRA_SERVER_ID) ?: return
             when (intent.action) {
                 FcmService.ACTION_FCM_DISMISS -> {
+                    val serverId = intent.getStringExtra(FcmService.EXTRA_SERVER_ID) ?: return
                     val notificationKey = settings.getNotificationKeyByServerId(serverId) ?: return
                     Log.d(TAG, "FCM dismiss for server entry $serverId")
                     settings.removeNotificationMapping(notificationKey)
@@ -85,11 +86,16 @@ class NotificationSyncService : NotificationListenerService() {
                     }
                 }
                 FcmService.ACTION_FCM_ACTION -> {
+                    val serverId = intent.getStringExtra(FcmService.EXTRA_SERVER_ID) ?: return
                     val actionTaken = intent.getStringExtra(FcmService.EXTRA_ACTION_TAKEN) ?: return
                     val notificationKey = settings.getNotificationKeyByServerId(serverId) ?: return
                     val actionResponse = intent.getStringExtra(FcmService.EXTRA_ACTION_RESPONSE)
                     Log.d(TAG, "FCM action '$actionTaken' for server entry $serverId")
                     scope.launch { handleActionRequest(notificationKey, serverId, actionTaken, actionResponse) }
+                }
+                FcmService.ACTION_FCM_RESYNC -> {
+                    Log.i(TAG, "FCM resync received — triggering full sync")
+                    scope.launch { fullSync() }
                 }
             }
         }
@@ -103,6 +109,7 @@ class NotificationSyncService : NotificationListenerService() {
         val fcmFilter = IntentFilter().apply {
             addAction(FcmService.ACTION_FCM_DISMISS)
             addAction(FcmService.ACTION_FCM_ACTION)
+            addAction(FcmService.ACTION_FCM_RESYNC)
         }
         registerReceiver(fcmReceiver, fcmFilter, RECEIVER_NOT_EXPORTED)
         Log.i(TAG, "NotificationSyncService started")
@@ -182,15 +189,36 @@ class NotificationSyncService : NotificationListenerService() {
     }
 
     private suspend fun pollServerDismissals() {
-        // Kept as a safety-net fallback in case FCM messages are dropped
-        // (e.g. device was offline for an extended period).
+        // When FCM is active (token registered), poll infrequently as a safety net for dropped
+        // messages (e.g. device was offline). When FCM is unavailable, poll every 10 s so that
+        // server-side dismissals and actions still reach the device in near-real-time.
+        var lastFcmActive: Boolean? = null
         while (scope.isActive) {
-            delay(10_000)
+            val fcmActive = settings.fcmToken != null
+            if (fcmActive != lastFcmActive) {
+                lastFcmActive = fcmActive
+                if (fcmActive) {
+                    Log.i(TAG, "FCM is active — switching poll loop to 5-minute safety-net interval")
+                } else {
+                    Log.i(TAG, "FCM unavailable — polling every 10 s for server dismissals")
+                }
+            }
+            delay(if (fcmActive) 300_000L else 10_000L)
             if (!settings.isConfigured) continue
 
             val serverNotifications = apiClient.getNotifications(settings.endpoint, settings.userId) ?: continue
             val localMappings = settings.getAllMappings()
             val activeKeys = try { activeNotifications?.map { it.key }?.toSet() } catch (_: Exception) { null }
+
+            // Detect server restart: the server holds notifications in memory only, so a
+            // restart wipes all entries.  If the server returns an empty list but we still
+            // have local mappings, assume a restart rather than mass-dismissal and resync
+            // (re-post everything) instead of cancelling the phone notifications.
+            if (serverNotifications.isEmpty() && localMappings.isNotEmpty()) {
+                Log.i(TAG, "Server returned empty list with ${localMappings.size} local mappings — server may have restarted, resyncing")
+                fullSync()
+                continue
+            }
 
             for ((notificationKey, serverId) in localMappings) {
                 val serverNotif = serverNotifications.find { it.id == serverId }
@@ -319,6 +347,12 @@ class NotificationSyncService : NotificationListenerService() {
         val text = extras.getCharSequence("android.text")?.toString().orEmpty()
         val bigText = extras.getCharSequence("android.bigText")?.toString()
 
+        // For the default SMS app, read the actual SMS body from the content provider to avoid
+        // potentially redacted notification content (e.g. OTP codes hidden by Android).
+        val smsBody: String? = if (sbn.packageName == Telephony.Sms.getDefaultSmsPackage(this)) {
+            fetchSmsBody(sbn.postTime)
+        } else null
+
         // MessagingStyle notifications (e.g. Messenger, WhatsApp) store the full
         // message history in android.messages as an array of Bundles.
         // Use the typed API on API 33+ to avoid silent deserialization failures.
@@ -331,7 +365,10 @@ class NotificationSyncService : NotificationListenerService() {
         val structuredMessages: List<NotificationMessage>?
         val body: String
 
-        if (!messagesArray.isNullOrEmpty()) {
+        if (smsBody != null) {
+            structuredMessages = null
+            body = smsBody
+        } else if (!messagesArray.isNullOrEmpty()) {
             structuredMessages = messagesArray.mapNotNull { extractMessage(it) }
             if (structuredMessages.isNotEmpty()) {
                 body = structuredMessages.joinToString("\n") { msg ->
@@ -434,6 +471,32 @@ class NotificationSyncService : NotificationListenerService() {
             packageManager.getApplicationLabel(info).toString()
         } catch (e: Exception) {
             packageName
+        }
+    }
+
+    /**
+     * Queries the SMS content provider for the inbox message that arrived around [timestampMs].
+     * Returns the raw SMS body, or null if no matching message is found or permission is denied.
+     * Used to retrieve unredacted content (e.g. OTP codes) that Android may hide in notifications.
+     */
+    private fun fetchSmsBody(timestampMs: Long): String? {
+        return try {
+            val projection = arrayOf(Telephony.Sms.BODY)
+            val selection = "${Telephony.Sms.DATE} BETWEEN ? AND ? AND ${Telephony.Sms.TYPE} = ${Telephony.Sms.MESSAGE_TYPE_INBOX}"
+            val selectionArgs = arrayOf(
+                (timestampMs - 30_000).toString(),
+                (timestampMs + 5_000).toString()
+            )
+            contentResolver.query(
+                Telephony.Sms.CONTENT_URI, projection, selection, selectionArgs,
+                "${Telephony.Sms.DATE} DESC"
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(cursor.getColumnIndexOrThrow(Telephony.Sms.BODY))
+                else null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to fetch SMS body from content provider: ${e.message}")
+            null
         }
     }
 

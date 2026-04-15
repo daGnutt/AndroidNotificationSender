@@ -13,8 +13,11 @@ An Android app that keeps your phone's notifications in sync with a web service.
 - **Orphan cleanup:** Every 10 seconds, any server entry whose notification is no longer active on the phone is automatically deleted (phone is the source of truth)
 - **Actions from web:** Tapping an action (e.g. Like, Reply) in the web UI fires the corresponding Android notification action on the phone, including reply text for RemoteInput-based reply actions. The notification is left on the device afterwards — the source app updates or dismisses it as appropriate (e.g. Teams replaces it with a sent receipt)
 - **Phone → server dismissal:** Swiping away a notification on the phone removes it from the server
-- **Startup sync:** On connect, orphaned server entries are cleaned up and any active notifications not yet tracked are posted
+- **Startup sync:** On connect, orphaned server entries are cleaned up and all active notifications are (re-)posted to the server
+- **Server restart resilience:** The server stores notifications in memory only. If a restart is detected (poll returns an empty list while the app has local mappings), the app automatically resyncs all active notifications so the web interface stays current
+- **FCM resync:** The server can send a `resync` FCM message (e.g. after a restart or token refresh) to trigger an immediate full sync of all active notifications
 - **QR code setup:** Scan a QR code from the web interface to configure endpoint and user ID instantly
+- **Unredacted SMS body:** When a notification arrives from the default SMS app, the actual SMS body is read from the Telephony content provider instead of the (potentially redacted) notification text, ensuring OTP codes and other sensitive SMS content are synced correctly
 
 ---
 
@@ -119,6 +122,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 The server sends FCM data messages to the phone when a notification is dismissed or an action is taken via the web UI — see [API_DOCS.md](API_DOCS.md) for the message format.
 
+The server can also send a `resync` FCM message (e.g. after a restart or when a new device token is registered) to trigger a full re-POST of all currently active phone notifications.
+
 ---
 
 ## Requirements
@@ -127,3 +132,4 @@ The server sends FCM data messages to the phone when a notification is dismissed
 - Notification listener permission
 - Camera permission (for QR scanning only)
 - `RECEIVE_SENSITIVE_NOTIFICATIONS` permission declared (enables unredacted content for sensitive notifications on Android 15+)
+- `READ_SMS` permission (reads unredacted SMS body from the Telephony content provider for default SMS app notifications)

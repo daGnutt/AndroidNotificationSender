@@ -112,24 +112,15 @@
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:visibility="gone" />
 
-        <!-- SMS permission status -->
+        <!-- FCM / polling status -->
         <TextView
-            android:id="@+id/tvSmsPermissionStatus"
+            android:id="@+id/tvFcmStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textAppearance="?attr/textAppearanceBody1"
             android:layout_marginTop="16dp"
-            android:layout_marginBottom="16dp"
+            android:layout_marginBottom="4dp"
             android:text="@string/checking_status" />
-
-        <!-- Grant SMS permission button (hidden when permission already granted) -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnGrantSmsPermission"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/btn_grant_sms_permission"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-            android:visibility="gone" />
 
         <!-- Refresh button -->
         <com.google.android.material.button.MaterialButton

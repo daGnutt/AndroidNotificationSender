@@ -42,6 +42,8 @@ Phone notification posted   → onNotificationPosted  → ApiClient.postNotifica
 Phone notification removed  → onNotificationRemoved → ApiClient.deleteNotification (if mapped)
 Server entry deleted        → pollServerDismissals (10s loop) → cancelNotification(key)
 App started (reconnect)     → onListenerConnected   → reconcile orphaned entries + backfill active
+FCM "resync" received       → FcmService broadcast  → NotificationSyncService.fullSync()
+FCM token rotated           → onNewToken            → re-register token; server sends "resync" back
 ```
 
 **`SettingsManager`** — SharedPreferences wrapper that stores endpoint, userId, a JSON map of `sbn.key → serverId`, and an app metadata cache (`packageName → { name, icon }`). All map/cache methods are `@Synchronized`. The notification map is the single source of truth for which phone notifications have been synced to the server.
@@ -65,7 +67,13 @@ App started (reconnect)     → onListenerConnected   → reconcile orphaned ent
 
 **Poll loop ordering matters:** In `pollServerDismissals`, always call `settings.removeNotificationMapping(key)` **before** `cancelNotification(key)`. If you cancel first, `onNotificationRemoved` fires and tries to DELETE an already-gone server entry.
 
-**Notification body priority:** Prefer `android.bigText` over `android.text` when extracting body content from `sbn.notification.extras`.
+**Server restart detection:** The backend stores notifications in memory only — a restart wipes all entries. In `pollServerDismissals`, if the server returns an empty list while local mappings exist, treat it as a restart and call `fullSync()` instead of cancelling phone notifications. This prevents all phone notifications from being dismissed on every server restart.
+
+**Notification body priority:** Prefer `android.bigText` over `android.text` when extracting body content from `sbn.notification.extras`. For notifications from the default SMS app, the body is fetched from the `Telephony.Sms` content provider (`fetchSmsBody()`) instead of notification extras — this provides unredacted content including OTP codes. Falls back to notification extras if the query finds nothing.
+
+**FCM message types:** `FcmService.onMessageReceived()` handles `"dismiss"`, `"action"`, and `"resync"`. Dismiss and action messages are forwarded as local broadcasts to `NotificationSyncService` (which holds the `NotificationListenerService` binding). Resync also broadcasts to `NotificationSyncService`, which calls `fullSync()`.
+
+**SMS content:** `SmsReceiver` has been removed. SMS notifications are handled by `NotificationSyncService` like any other notification, but `postSbn()` detects the default SMS app and fetches the actual body from the Telephony content provider. Requires `READ_SMS` permission (same permission group as `RECEIVE_SMS` — typically auto-granted if user has an SMS app).
 
 **QR payload format:**
 ```json
@@ -90,7 +98,8 @@ Live server: configured by the user at setup time
 
 ## Permissions & Setup
 
-The app requires two permissions:
+The app requires these permissions:
 - `INTERNET` — declared in manifest, granted automatically
 - Notification Listener — must be granted manually via Settings → Notification Access. The UI shows a button to open that settings screen when not granted.
 - `CAMERA` — runtime permission, requested when user taps "Scan QR"
+- `READ_SMS` — declared in manifest, auto-granted alongside any SMS app permission grant; used by `fetchSmsBody()` to read unredacted SMS content from the Telephony content provider
