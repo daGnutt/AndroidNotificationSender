@@ -122,12 +122,34 @@ class ApiClient {
                     ServerNotification(
                         id = obj.getString("id"),
                         actionTaken = obj.optString("actionTaken").takeIf { it.isNotBlank() },
-                        actionResponse = obj.optString("actionResponse").takeIf { it.isNotBlank() }
+                        actionResponse = obj.optString("actionResponse").takeIf { it.isNotBlank() },
+                        actionDispatched = obj.optBoolean("actionDispatched", false)
                     )
                 }
             }
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /**
+     * POST /api/notifications/:id/actions/dispatched — acknowledges that the action has been
+     * fired on the device. This keeps the server entry visible in the web UI after an action.
+     */
+    fun postActionDispatched(
+        endpoint: String,
+        userId: String,
+        notificationId: String
+    ): Boolean {
+        return try {
+            val payload = JSONObject().apply { put("userId", userId) }
+            val request = Request.Builder()
+                .url("$endpoint/api/notifications/$notificationId/actions/dispatched")
+                .post(payload.toString().toRequestBody(jsonMediaType))
+                .build()
+            client.newCall(request).execute().use { response -> response.isSuccessful }
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -177,7 +199,8 @@ class ApiClient {
 data class ServerNotification(
     val id: String,
     val actionTaken: String?,
-    val actionResponse: String?
+    val actionResponse: String?,
+    val actionDispatched: Boolean = false
 )
 
 data class NotificationMessage(

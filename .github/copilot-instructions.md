@@ -73,6 +73,8 @@ FCM token rotated           → onNewToken            → re-register token; ser
 
 **FCM message types:** `FcmService.onMessageReceived()` handles `"dismiss"`, `"action"`, and `"resync"`. Dismiss and action messages are forwarded as local broadcasts to `NotificationSyncService` (which holds the `NotificationListenerService` binding). Resync also broadcasts to `NotificationSyncService`, which calls `fullSync()`.
 
+**Action dispatch flow:** When an "action" FCM message arrives, `handleActionRequest` (1) removes the local mapping, (2) fires the intent on the device, then (3) calls `POST /api/notifications/:id/actions/dispatched` to acknowledge dispatch. The server entry is **not** deleted — it is kept so the web UI retains a history record. The mapping is removed first so that when the source app subsequently dismisses the notification, `onNotificationRemoved` finds no mapping and exits early (no spurious DELETE). The fallback poll loop only dispatches an action when `actionTaken != null && !actionDispatched` to avoid re-firing after a successful dispatch.
+
 **SMS content:** `SmsReceiver` has been removed. SMS notifications are handled by `NotificationSyncService` like any other notification, but `postSbn()` detects the default SMS app and fetches the actual body from the Telephony content provider. Requires `READ_SMS` permission (same permission group as `RECEIVE_SMS` — typically auto-granted if user has an SMS app).
 
 **QR payload format:**

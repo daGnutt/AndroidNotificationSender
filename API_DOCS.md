@@ -177,6 +177,35 @@ Delete a notification. Only the owning user can delete their own notifications.
 
 ---
 
+#### `POST /api/notifications/:id/actions/dispatched`
+
+Acknowledge that the Android app has successfully fired the action on the device.
+Sets `actionDispatched = true` on the stored notification, unblocking any future
+`DELETE` calls and preventing the fallback poll loop from re-dispatching the action.
+
+**Path parameters**
+
+| Parameter | Description     |
+|-----------|-----------------|
+| `id`      | Notification ID |
+
+**Request body**
+
+| Field    | Type   | Required | Description |
+|----------|--------|----------|-------------|
+| `userId` | string | Yes      | User UUID   |
+
+**Responses**
+
+| Status | Description                    | Body                            |
+|--------|--------------------------------|---------------------------------|
+| `200`  | Acknowledged                   | `{ success: true }`             |
+| `400`  | No action recorded yet         | `{ success: false, error }`     |
+| `401`  | Missing/invalid userId         | `{ success: false, error }`     |
+| `404`  | Notification not found         | `{ success: false, error }`     |
+
+---
+
 #### `POST /api/notifications/:id/actions`
 
 Record the action taken on a notification (e.g. a reply or button tap). Updates the `actionTaken` and `actionResponse` fields on the stored notification.

@@ -232,7 +232,7 @@ class NotificationSyncService : NotificationListenerService() {
                         }
                     }
 
-                    serverNotif.actionTaken != null -> {
+                    serverNotif.actionTaken != null && !serverNotif.actionDispatched -> {
                         Log.d(TAG, "Fallback poll: action '${serverNotif.actionTaken}' requested for $serverId")
                         handleActionRequest(notificationKey, serverId, serverNotif.actionTaken, serverNotif.actionResponse)
                     }
@@ -252,9 +252,13 @@ class NotificationSyncService : NotificationListenerService() {
     }
 
     /**
-     * Removes the local mapping, deletes the server entry, and fires the action on the device.
+     * Fires the action on the device and acknowledges dispatch to the server.
      * Called both from the FCM broadcast receiver and the fallback poll loop.
-     * Mapping is removed first so that the resulting onNotificationRemoved callback exits early.
+     *
+     * The local mapping is removed first so that the resulting onNotificationRemoved callback
+     * (fired when the source app dismisses the notification after the action) exits early and
+     * does not issue a DELETE — the server entry is intentionally kept so the web UI retains
+     * a history record of the action.
      */
     private suspend fun handleActionRequest(
         notificationKey: String,
@@ -263,8 +267,8 @@ class NotificationSyncService : NotificationListenerService() {
         actionResponse: String?
     ) {
         settings.removeNotificationMapping(notificationKey)
-        try { apiClient.deleteNotification(settings.endpoint, settings.userId, serverId) } catch (_: Exception) {}
         fireAction(notificationKey, actionTaken, actionResponse)
+        try { apiClient.postActionDispatched(settings.endpoint, settings.userId, serverId) } catch (_: Exception) {}
     }
 
     /**
