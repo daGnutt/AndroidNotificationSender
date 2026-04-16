@@ -183,7 +183,14 @@ class NotificationSyncService : NotificationListenerService() {
         for (sbn in active) {
             if (sbn.packageName == packageName) continue
             if (currentActiveKeys != null && sbn.key !in currentActiveKeys) continue
-            postSbn(sbn)
+            // Use the key mutex so we don't race with a concurrent onNotificationPosted.
+            // If onNotificationPosted already posted this notification while we were purging
+            // server entries, the mapping will exist and we skip to avoid a duplicate.
+            mutexFor(sbn.key).withLock {
+                if (settings.getNotificationServerId(sbn.key) == null) {
+                    postSbn(sbn)
+                }
+            }
         }
         Log.i(TAG, "Full sync complete — posted ${active.count { it.packageName != packageName }} notifications")
     }
@@ -341,7 +348,10 @@ class NotificationSyncService : NotificationListenerService() {
                 }
                 postSbn(sbn)
             }
-            keyMutexes.remove(key)
+            // Note: keyMutexes entries are intentionally left in place. Removing a mutex
+            // outside its withLock block is a race: a waiting coroutine holds a reference to
+            // the old mutex while a new coroutine creates a fresh one, defeating mutual
+            // exclusion and allowing concurrent postSbn calls for the same key.
         }
     }
 
@@ -449,6 +459,10 @@ class NotificationSyncService : NotificationListenerService() {
 
         val notificationKey = sbn.key
         val serverId = settings.getNotificationServerId(notificationKey) ?: return
+        // Remove the mapping before the async network call so that a concurrent
+        // onNotificationPosted for the same key (notification re-shown) can store
+        // a fresh mapping without it being wiped when this coroutine completes.
+        settings.removeNotificationMapping(notificationKey)
 
         scope.launch {
             try {
@@ -457,7 +471,6 @@ class NotificationSyncService : NotificationListenerService() {
                     userId = settings.userId,
                     notificationId = serverId
                 )
-                settings.removeNotificationMapping(notificationKey)
                 if (success) {
                     Log.d(TAG, "Deleted notification $serverId from server")
                 } else {

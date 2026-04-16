@@ -65,7 +65,16 @@ FCM token rotated           → onNewToken            → re-register token; ser
 
 **Update = delete + re-post:** `onNotificationPosted` fires on every notification change, not just creation. Always check if the key is already mapped; if so, delete the old server entry before posting a new one. Skipping this creates duplicate server entries with orphaned mappings.
 
-**Poll loop ordering matters:** In `pollServerDismissals`, always call `settings.removeNotificationMapping(key)` **before** `cancelNotification(key)`. If you cancel first, `onNotificationRemoved` fires and tries to DELETE an already-gone server entry.
+ — prevents race conditions where rapid back-to-back posts for the same key create duplicate server entries. The mutex is intentionally **never removed** from the map; removing it outside the `withLock` block would allow a queued coroutine and a new coroutine to hold separate mutexes for the same key simultaneously, defeating mutual exclusion.
+
+**`fullSync` uses key mutexes when re-posting** — the re-post loop in `fullSync` wraps each `postSbn` call in `mutexFor(sbn.key).withLock { if (mapping == null) postSbn(sbn) }`. This prevents `fullSync` and a concurrent `onNotificationPosted` from both posting the same notification: whichever acquires the mutex first stores the mapping, and the other skips.
+
+
+
+**Mapping removal always comes first:** Always call `settings.removeNotificationMapping(key)` **before** any network call or `cancelNotification(key)` that might trigger `onNotificationRemoved`. This applies everywhere:
+- In `pollServerDismissals`: remove mapping before `cancelNotification` (prevents `onNotificationRemoved` from issuing a spurious DELETE for an already-gone entry).
+- In `onNotificationRemoved`: remove mapping synchronously (on the calling thread) before `scope.launch` (prevents a concurrent `onNotificationPosted` re-showing the same notification from having its new mapping wiped when the remove runs later on a background thread).
+- In `handleActionRequest`: remove mapping before firing the intent (prevents `onNotificationRemoved` from issuing a spurious DELETE when the source app dismisses the notification after the action).
 
 **Server restart detection:** The backend stores notifications in memory only — a restart wipes all entries. In `pollServerDismissals`, if the server returns an empty list while local mappings exist, treat it as a restart and call `fullSync()` instead of cancelling phone notifications. This prevents all phone notifications from being dismissed on every server restart.
 
