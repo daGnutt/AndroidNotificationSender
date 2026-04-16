@@ -347,6 +347,19 @@ class NotificationSyncService : NotificationListenerService() {
                     settings.removeNotificationMapping(key)
                 }
                 postSbn(sbn)
+
+                // If the notification was already dismissed while we were posting (sub-second
+                // notifications), onNotificationRemoved would have found no mapping and exited
+                // early. Clean up the server entry we just created.
+                val storedServerId = settings.getNotificationServerId(key)
+                if (storedServerId != null) {
+                    val stillActive = try { activeNotifications?.any { it.key == key } } catch (_: Exception) { true }
+                    if (stillActive == false) {
+                        Log.d(TAG, "Notification $key already gone — deleting server entry $storedServerId")
+                        settings.removeNotificationMapping(key)
+                        try { apiClient.deleteNotification(settings.endpoint, settings.userId, storedServerId) } catch (_: Exception) {}
+                    }
+                }
             }
             // Note: keyMutexes entries are intentionally left in place. Removing a mutex
             // outside its withLock block is a race: a waiting coroutine holds a reference to

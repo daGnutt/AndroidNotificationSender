@@ -71,6 +71,8 @@ FCM token rotated           → onNewToken            → re-register token; ser
 
 
 
+**Short-lived notification cleanup:** After `postSbn` completes inside `onNotificationPosted`'s coroutine, check whether the notification is still present in `activeNotifications`. If it has already been dismissed (sub-second notifications), `onNotificationRemoved` would have found no mapping and exited early — so the post-post check immediately deletes the server entry and clears the mapping. The check uses `stillActive == false` (not `!= true`) to distinguish `false` from the nullable `null` case, defaulting to no-delete when `activeNotifications` throws.
+
 **Mapping removal always comes first:** Always call `settings.removeNotificationMapping(key)` **before** any network call or `cancelNotification(key)` that might trigger `onNotificationRemoved`. This applies everywhere:
 - In `pollServerDismissals`: remove mapping before `cancelNotification` (prevents `onNotificationRemoved` from issuing a spurious DELETE for an already-gone entry).
 - In `onNotificationRemoved`: remove mapping synchronously (on the calling thread) before `scope.launch` (prevents a concurrent `onNotificationPosted` re-showing the same notification from having its new mapping wiped when the remove runs later on a background thread).
