@@ -377,13 +377,20 @@ Create a new user directly (alternative to `POST /api/auth`). Returns `409` if t
 
 Get a single user by their UUID. Updates `last_active` on each call. **Password hash is excluded.**
 
+**Query parameters**
+
+| Parameter | Type   | Required | Description |
+|-----------|--------|----------|-------------|
+| `userId`  | string | Yes      | User UUID (must match the path parameter) |
+
 **Responses**
 
-| Status | Description      | Body                                                    |
-|--------|------------------|---------------------------------------------------------|
-| `200`  | Success          | `{ user_id, username, email, created_at, last_active }` |
-| `404`  | User not found   | `{ success: false, error }`                             |
-| `500`  | Server error     | `{ success: false, error }`                             |
+| Status | Description             | Body                                                    |
+|--------|-------------------------|---------------------------------------------------------|
+| `200`  | Success                 | `{ user_id, username, email, created_at, last_active }` |
+| `401`  | Missing/invalid userId  | `{ success: false, error }`                             |
+| `404`  | User not found          | `{ success: false, error }`                             |
+| `500`  | Server error            | `{ success: false, error }`                             |
 
 ---
 
