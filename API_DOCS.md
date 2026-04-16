@@ -108,7 +108,7 @@ Retrieve all notifications for the authenticated user, ordered newest first.
 
 ```json
 {
-  "id": "1712870400000",
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "title": "Example",
   "body": "Notification body text",
   "timestamp": "2024-04-11T20:00:00.000Z",
@@ -173,6 +173,8 @@ Delete a notification. Only the owning user can delete their own notifications.
 |--------|-------------------------|---------------------------------|
 | `200`  | Deleted successfully    | `{ success: true }`             |
 | `401`  | Missing/invalid userId  | `{ success: false, error }`     |
+| `404`  | Notification not found  | `{ success: false, error }`     |
+| `409`  | Action recorded but not yet dispatched | `{ success: false, error }` |
 | `500`  | Server error            | `{ success: false, error }`     |
 
 ---
