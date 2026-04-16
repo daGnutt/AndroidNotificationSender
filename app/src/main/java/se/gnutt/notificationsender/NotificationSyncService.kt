@@ -15,6 +15,7 @@ import android.os.Bundle
 import android.os.Parcelable
 import android.provider.Telephony
 import android.service.notification.NotificationListenerService
+import android.service.notification.NotificationListenerService.Ranking
 import android.service.notification.StatusBarNotification
 import android.util.Base64
 import android.util.Log
@@ -447,9 +448,16 @@ class NotificationSyncService : NotificationListenerService() {
                 if (title.isBlank()) null else Pair(action.semanticAction, title)
             }
             ?.takeIf { it.isNotEmpty() }
-        val nm = getSystemService(NotificationManager::class.java)
-        val channel = sbn.notification.channelId?.let { nm.getNotificationChannel(it) }
-        val isSilent = channel?.importance?.let { it < NotificationManager.IMPORTANCE_DEFAULT } ?: false
+        // Use the NotificationListenerService ranking API to get the source app's channel.
+        // NotificationManager.getNotificationChannel() only resolves channels for the calling
+        // package, so it always returns null for third-party notifications.
+        val isSilent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val ranking = Ranking()
+            currentRanking.getRanking(sbn.key, ranking)
+            ranking.channel?.importance?.let { it < NotificationManager.IMPORTANCE_DEFAULT } ?: false
+        } else {
+            false
+        }
         try {
             val serverId = apiClient.postNotification(
                 endpoint = settings.endpoint,
