@@ -103,7 +103,7 @@ Live server: configured by the user at setup time
 | `POST` | `/api/notifications` | `userId` in body | Post a notification |
 | `DELETE` | `/api/notifications/:id` | `?userId=` query param | Remove a notification |
 | `GET` | `/api/notifications` | `?userId=` query param | List all notifications (returns `id` per item) |
-| `GET` | `/api/users/:userId` | — | Verify user exists (404 = not found) |
+| `GET` | `/api/users/:userId` | `?userId=` query param | Verify user exists (404 = not found). Despite the userId being in the URL path, the server's `requireUserId` middleware also requires `?userId=` as a query parameter — pass it in both places. |
 
 `userId` is a UUID obtained from `POST /api/auth` (username + password). It is **not** the username — it's the `userId` field in the response.
 

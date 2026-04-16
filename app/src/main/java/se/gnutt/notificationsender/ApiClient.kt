@@ -183,7 +183,7 @@ class ApiClient {
     fun validateUser(endpoint: String, userId: String): String? {
         return try {
             val request = Request.Builder()
-                .url("$endpoint/api/users/$userId")
+                .url("$endpoint/api/users/$userId?userId=$userId")
                 .get()
                 .build()
             client.newCall(request).execute().use { response ->
