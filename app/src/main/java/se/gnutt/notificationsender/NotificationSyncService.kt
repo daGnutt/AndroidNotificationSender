@@ -363,8 +363,16 @@ class NotificationSyncService : NotificationListenerService() {
 
         // For the default SMS app, read the actual SMS body from the content provider to avoid
         // potentially redacted notification content (e.g. OTP codes hidden by Android).
+        // The content provider write may lag behind onNotificationPosted (timing race), so retry
+        // a few times with a short delay before giving up.
         val smsBody: String? = if (sbn.packageName == Telephony.Sms.getDefaultSmsPackage(this)) {
-            fetchSmsBody(sbn.postTime)
+            var body: String? = null
+            for (attempt in 1..4) {
+                body = fetchSmsBody(sbn.postTime)
+                if (body != null) break
+                if (attempt < 4) delay(1_000L)
+            }
+            body
         } else null
 
         // MessagingStyle notifications (e.g. Messenger, WhatsApp) store the full
