@@ -15,6 +15,17 @@ export PATH=$JAVA_HOME/bin:$PATH
 # Output: app/build/outputs/apk/debug/app-debug.apk
 ```
 
+**Build + install in one step (all connected devices):**
+```bash
+./deploy.sh
+```
+
+**Build release APK** (requires `release.jks` in repo root — signing credentials in `app/build.gradle.kts`):
+```bash
+./gradlew assembleRelease
+# Output: app/build/outputs/apk/release/app-release.apk
+```
+
 **Install to connected phone:**
 ```bash
 ~/Android/Sdk/platform-tools/adb install -r app/build/outputs/apk/debug/app-debug.apk
@@ -52,6 +63,10 @@ FCM token rotated           → onNewToken            → re-register token; ser
 
 **`ApiClient`** — pure OkHttp, no Android context. All methods are blocking (call on IO dispatcher). Returns `null`/`false` on failure rather than throwing.
 
+## Backend
+
+The receiving system is **[daGnutt/WebNotifications](https://github.com/daGnutt/WebNotifications)**. When implementing new features or fixing bugs that touch the API, consult that repo's documentation to ensure the request/response shapes and FCM message formats stay in sync.
+
 ## Documentation
 
 **Always update documentation alongside code changes.** When modifying behaviour, adding features, or fixing bugs, update all relevant docs in the same commit:
@@ -65,11 +80,9 @@ FCM token rotated           → onNewToken            → re-register token; ser
 
 **Update = delete + re-post:** `onNotificationPosted` fires on every notification change, not just creation. Always check if the key is already mapped; if so, delete the old server entry before posting a new one. Skipping this creates duplicate server entries with orphaned mappings.
 
- — prevents race conditions where rapid back-to-back posts for the same key create duplicate server entries. The mutex is intentionally **never removed** from the map; removing it outside the `withLock` block would allow a queued coroutine and a new coroutine to hold separate mutexes for the same key simultaneously, defeating mutual exclusion.
+**Per-key mutexes (`keyMutexes`)** — prevents race conditions where rapid back-to-back posts for the same key create duplicate server entries. The mutex is intentionally **never removed** from the map; removing it outside the `withLock` block would allow a queued coroutine and a new coroutine to hold separate mutexes for the same key simultaneously, defeating mutual exclusion.
 
 **`fullSync` uses key mutexes when re-posting** — the re-post loop in `fullSync` wraps each `postSbn` call in `mutexFor(sbn.key).withLock { if (mapping == null) postSbn(sbn) }`. This prevents `fullSync` and a concurrent `onNotificationPosted` from both posting the same notification: whichever acquires the mutex first stores the mapping, and the other skips.
-
-
 
 **Short-lived notification cleanup:** After `postSbn` completes inside `onNotificationPosted`'s coroutine, check whether the notification is still present in `activeNotifications`. If it has already been dismissed (sub-second notifications), `onNotificationRemoved` would have found no mapping and exited early — so the post-post check immediately deletes the server entry and clears the mapping. The check uses `stillActive == false` (not `!= true`) to distinguish `false` from the nullable `null` case, defaulting to no-delete when `activeNotifications` throws.
 
@@ -77,6 +90,8 @@ FCM token rotated           → onNewToken            → re-register token; ser
 - In `pollServerDismissals`: remove mapping before `cancelNotification` (prevents `onNotificationRemoved` from issuing a spurious DELETE for an already-gone entry).
 - In `onNotificationRemoved`: remove mapping synchronously (on the calling thread) before `scope.launch` (prevents a concurrent `onNotificationPosted` re-showing the same notification from having its new mapping wiped when the remove runs later on a background thread).
 - In `handleActionRequest`: remove mapping before firing the intent (prevents `onNotificationRemoved` from issuing a spurious DELETE when the source app dismisses the notification after the action).
+
+**`DELETE /api/notifications/:id` returns 409 when action is pending:** The server refuses to delete a notification whose `actionTaken` is set but `actionDispatched` is still `false`. `deleteNotification` currently returns `Boolean` and does not distinguish 409 from other failures — tracked in [issue #6](https://github.com/daGnutt/AndroidNotificationSender/issues/6). Until that is fixed: a 409 is silently treated as a failed delete (the server entry is left as a history record). The trigger scenario is: web UI records an action → FCM is delayed → user dismisses the notification from the phone before the poll loop fires → mapping is removed, server entry stays stuck with `actionTaken` set and `actionDispatched` false. When refactoring, treat `ActionPending` (409) as "leave on server as history" everywhere — **do not** retry the delete or call `postActionDispatched` for a never-fired action.
 
 **Server restart detection:** The backend stores notifications in memory only — a restart wipes all entries. In `pollServerDismissals`, if the server returns an empty list while local mappings exist, treat it as a restart and call `fullSync()` instead of cancelling phone notifications. This prevents all phone notifications from being dismissed on every server restart.
 
@@ -96,6 +111,10 @@ Parsed in `QrScanActivity.parseAndReturn()`, returned via `Intent` extras to `Ma
 
 **No viewBinding** — uses `findViewById` throughout. Do not re-enable viewBinding without also updating all activity classes.
 
+**MessagingStyle `messages` array:** For notifications that use `MessagingStyle` (e.g. WhatsApp, Messenger), `postSbn()` extracts the structured message history from `android.messages` (array of `Bundle`) and posts it as a `messages` field. Each entry has `sender`, `text`, `timestamp`, and optional `senderIcon` (base64). On API 33+ use the typed `getParcelableArray(key, Bundle::class.java)` overload to avoid silent deserialization failures.
+
+**`isSilent` flag:** Determined via `NotificationListenerService.currentRanking` (not `NotificationManager.getNotificationChannel()` which only works for the calling package). A notification is silent when its channel importance is below `IMPORTANCE_DEFAULT`. Always use the ranking API for third-party notification channels.
+
 ## API Summary
 
 Live server: configured by the user at setup time
@@ -104,8 +123,10 @@ Live server: configured by the user at setup time
 |--------|------|------|---------|
 | `POST` | `/api/notifications` | `userId` in body | Post a notification |
 | `DELETE` | `/api/notifications/:id` | `?userId=` query param | Remove a notification |
-| `GET` | `/api/notifications` | `?userId=` query param | List all notifications (returns `id` per item) |
-| `GET` | `/api/users/:userId` | — | Verify user exists (404 = not found) |
+| `GET` | `/api/notifications` | `?userId=` query param | List all notifications (poll for dismissals/actions) |
+| `GET` | `/api/users/:userId` | `?userId=` query param | Verify user exists (401/403 = not found/wrong user) |
+| `POST` | `/api/device-tokens` | `userId` in body | Register/update FCM token for push delivery |
+| `POST` | `/api/notifications/:id/actions/dispatched` | `userId` in body | Acknowledge action dispatch (keeps server entry for history) |
 
 `userId` is a UUID obtained from `POST /api/auth` (username + password). It is **not** the username — it's the `userId` field in the response.
 
@@ -116,3 +137,4 @@ The app requires these permissions:
 - Notification Listener — must be granted manually via Settings → Notification Access. The UI shows a button to open that settings screen when not granted.
 - `CAMERA` — runtime permission, requested when user taps "Scan QR"
 - `READ_SMS` — declared in manifest, auto-granted alongside any SMS app permission grant; used by `fetchSmsBody()` to read unredacted SMS content from the Telephony content provider
+- `RECEIVE_SENSITIVE_NOTIFICATIONS` — declared in manifest; enables unredacted notification content for sensitive notifications on Android 15+
