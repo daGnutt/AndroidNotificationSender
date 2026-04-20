@@ -88,20 +88,29 @@ class ApiClient {
 
     /**
      * DELETE /api/notifications/:id — removes the notification from the server.
+     * Returns [DeleteResult] so callers can distinguish a 409 (action pending, server keeps
+     * the entry as a history record) from a genuine failure.
      */
     fun deleteNotification(
         endpoint: String,
         userId: String,
         notificationId: String
-    ): Boolean {
+    ): DeleteResult {
         return try {
             val request = Request.Builder()
                 .url("$endpoint/api/notifications/$notificationId?userId=$userId")
                 .delete()
                 .build()
-            client.newCall(request).execute().use { response -> response.isSuccessful }
+            client.newCall(request).execute().use { response ->
+                when {
+                    response.isSuccessful   -> DeleteResult.Success
+                    response.code == 404    -> DeleteResult.NotFound
+                    response.code == 409    -> DeleteResult.ActionPending
+                    else                    -> DeleteResult.Failure(response.code)
+                }
+            }
         } catch (e: Exception) {
-            false
+            DeleteResult.Failure(-1)
         }
     }
 
@@ -194,6 +203,18 @@ class ApiClient {
             e.message ?: e.javaClass.simpleName
         }
     }
+}
+
+sealed class DeleteResult {
+    /** The server entry was removed (2xx). */
+    object Success : DeleteResult()
+    /** The server entry was already gone (404). Treat the same as Success for cleanup. */
+    object NotFound : DeleteResult()
+    /** The server refused deletion because an action is pending but not yet dispatched (409).
+     *  The entry is intentionally kept as a history record; do not retry. */
+    object ActionPending : DeleteResult()
+    /** Any other non-success response or a network exception ([code] == -1). */
+    data class Failure(val code: Int) : DeleteResult()
 }
 
 data class ServerNotification(

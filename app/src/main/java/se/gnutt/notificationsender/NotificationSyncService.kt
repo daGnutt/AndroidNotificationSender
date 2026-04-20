@@ -155,13 +155,19 @@ class NotificationSyncService : NotificationListenerService() {
     private suspend fun fullSync() {
         val active = try { activeNotifications } catch (e: Exception) { null } ?: return
 
-        // Delete all locally-known server entries
+        // Delete all locally-known server entries. Entries that return ActionPending (409) are
+        // intentionally kept by the server as history records; skip their mapping removal so the
+        // re-post loop below also skips them (no point re-posting a frozen history entry).
         val localMappings = settings.getAllMappings()
+        val actionPendingKeys = mutableSetOf<String>()
         for ((notificationKey, serverId) in localMappings) {
-            try {
-                apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
-            } catch (_: Exception) {}
-            settings.removeNotificationMapping(notificationKey)
+            val result = apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
+            if (result == DeleteResult.ActionPending) {
+                Log.i(TAG, "fullSync: server entry $serverId has pending action — keeping as history, skipping re-post")
+                actionPendingKeys += notificationKey
+            } else {
+                settings.removeNotificationMapping(notificationKey)
+            }
         }
 
         // Purge any remaining server entries — this catches both entries whose delete
@@ -170,10 +176,13 @@ class NotificationSyncService : NotificationListenerService() {
         val serverNotifications = apiClient.getNotifications(settings.endpoint, settings.userId)
         if (serverNotifications != null) {
             for (serverNotif in serverNotifications) {
-                try {
-                    apiClient.deleteNotification(settings.endpoint, settings.userId, serverNotif.id)
-                    Log.d(TAG, "Purged server entry ${serverNotif.id}")
-                } catch (_: Exception) {}
+                val result = apiClient.deleteNotification(settings.endpoint, settings.userId, serverNotif.id)
+                when (result) {
+                    DeleteResult.ActionPending ->
+                        Log.i(TAG, "fullSync: skipping 409-protected orphan ${serverNotif.id} — kept as history")
+                    else ->
+                        Log.d(TAG, "Purged server entry ${serverNotif.id}")
+                }
             }
         }
 
@@ -183,10 +192,11 @@ class NotificationSyncService : NotificationListenerService() {
         // freshly-posted server entry orphaned.
         val currentActiveKeys = try { activeNotifications?.map { it.key }?.toSet() } catch (_: Exception) { null }
 
-        // Post all currently active notifications
+        // Post all currently active notifications (skip those whose server entry is frozen as history)
         for (sbn in active) {
             if (sbn.packageName == packageName) continue
             if (currentActiveKeys != null && sbn.key !in currentActiveKeys) continue
+            if (sbn.key in actionPendingKeys) continue
             // Use the key mutex so we don't race with a concurrent onNotificationPosted.
             // If onNotificationPosted already posted this notification while we were purging
             // server entries, the mapping will exist and we skip to avoid a duplicate.
@@ -253,9 +263,10 @@ class NotificationSyncService : NotificationListenerService() {
                     activeKeys != null && notificationKey !in activeKeys -> {
                         Log.d(TAG, "Fallback poll: notification $notificationKey gone from phone — deleting server entry $serverId")
                         settings.removeNotificationMapping(notificationKey)
-                        try {
-                            apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
-                        } catch (_: Exception) {}
+                        val result = apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
+                        if (result == DeleteResult.ActionPending) {
+                            Log.i(TAG, "Fallback poll: server entry $serverId has pending action — kept as history (notification already gone from phone)")
+                        }
                     }
                 }
             }
@@ -344,10 +355,14 @@ class NotificationSyncService : NotificationListenerService() {
             mutexFor(key).withLock {
                 val existingServerId = settings.getNotificationServerId(key)
                 if (existingServerId != null) {
-                    // Notification was updated — delete old server entry and re-post with fresh content
-                    try {
-                        apiClient.deleteNotification(settings.endpoint, settings.userId, existingServerId)
-                    } catch (_: Exception) {}
+                    // Notification was updated — delete old server entry and re-post with fresh content.
+                    // If the server refuses deletion because an action is pending (409), the existing
+                    // entry is frozen as a history record and cannot be replaced; skip the re-post.
+                    val deleteResult = apiClient.deleteNotification(settings.endpoint, settings.userId, existingServerId)
+                    if (deleteResult == DeleteResult.ActionPending) {
+                        Log.i(TAG, "Notification $key updated but server entry $existingServerId has pending action — skipping re-post, keeping history entry")
+                        return@withLock
+                    }
                     settings.removeNotificationMapping(key)
                 }
                 postSbn(sbn)
@@ -361,7 +376,10 @@ class NotificationSyncService : NotificationListenerService() {
                     if (stillActive == false) {
                         Log.d(TAG, "Notification $key already gone — deleting server entry $storedServerId")
                         settings.removeNotificationMapping(key)
-                        try { apiClient.deleteNotification(settings.endpoint, settings.userId, storedServerId) } catch (_: Exception) {}
+                        val cleanupResult = apiClient.deleteNotification(settings.endpoint, settings.userId, storedServerId)
+                        if (cleanupResult == DeleteResult.ActionPending) {
+                            Log.i(TAG, "Sub-second cleanup: server entry $storedServerId has pending action — kept as history")
+                        }
                     }
                 }
             }
@@ -497,19 +515,18 @@ class NotificationSyncService : NotificationListenerService() {
         settings.removeNotificationMapping(notificationKey)
 
         scope.launch {
-            try {
-                val success = apiClient.deleteNotification(
-                    endpoint = settings.endpoint,
-                    userId = settings.userId,
-                    notificationId = serverId
-                )
-                if (success) {
+            val result = apiClient.deleteNotification(
+                endpoint = settings.endpoint,
+                userId = settings.userId,
+                notificationId = serverId
+            )
+            when (result) {
+                DeleteResult.Success, DeleteResult.NotFound ->
                     Log.d(TAG, "Deleted notification $serverId from server")
-                } else {
-                    Log.w(TAG, "Server returned error when deleting $serverId")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to delete notification: ${e.message}")
+                DeleteResult.ActionPending ->
+                    Log.i(TAG, "Server entry $serverId kept as history — action was pending when user dismissed")
+                is DeleteResult.Failure ->
+                    Log.w(TAG, "Server returned error ${result.code} when deleting $serverId")
             }
         }
     }
