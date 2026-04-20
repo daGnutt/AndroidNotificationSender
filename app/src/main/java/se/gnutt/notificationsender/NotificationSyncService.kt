@@ -1,12 +1,15 @@
 package se.gnutt.notificationsender
 
+import android.Manifest
 import android.app.NotificationManager
 import android.app.RemoteInput
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import androidx.core.content.ContextCompat
 import android.graphics.Canvas
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
@@ -522,10 +525,19 @@ class NotificationSyncService : NotificationListenerService() {
 
     /**
      * Queries the SMS content provider for the inbox message that arrived around [timestampMs].
-     * Returns the raw SMS body, or null if no matching message is found or permission is denied.
+     * Returns the raw SMS body, or null if:
+     * - [READ_SMS][android.Manifest.permission.READ_SMS] has not been granted at runtime, or
+     * - no matching message is found in the content provider.
+     *
      * Used to retrieve unredacted content (e.g. OTP codes) that Android may hide in notifications.
+     * A [SecurityException] catch is kept as a safety net in case the permission is revoked between
+     * the check and the query.
      */
     private fun fetchSmsBody(timestampMs: Long): String? {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS)
+                != PackageManager.PERMISSION_GRANTED) {
+            return null
+        }
         return try {
             val projection = arrayOf(Telephony.Sms.BODY)
             val selection = "${Telephony.Sms.DATE} BETWEEN ? AND ? AND ${Telephony.Sms.TYPE} = ${Telephony.Sms.MESSAGE_TYPE_INBOX}"
@@ -540,6 +552,9 @@ class NotificationSyncService : NotificationListenerService() {
                 if (cursor.moveToFirst()) cursor.getString(cursor.getColumnIndexOrThrow(Telephony.Sms.BODY))
                 else null
             }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "READ_SMS permission revoked between check and query: ${e.message}")
+            null
         } catch (e: Exception) {
             Log.w(TAG, "Failed to fetch SMS body from content provider: ${e.message}")
             null
