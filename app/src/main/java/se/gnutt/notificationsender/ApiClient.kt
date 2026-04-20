@@ -39,7 +39,8 @@ class ApiClient {
         icon: String? = null,
         actions: List<Pair<Int, String>>? = null,
         messages: List<NotificationMessage>? = null,
-        isSilent: Boolean = false
+        isSilent: Boolean = false,
+        androidKey: String? = null
     ): String? {
         val payload = JSONObject().apply {
             put("userId", userId)
@@ -50,6 +51,7 @@ class ApiClient {
             if (appName != null) put("appName", appName)
             if (icon != null) put("icon", icon)
             put("isSilent", isSilent)
+            if (androidKey != null) put("androidKey", androidKey)
             if (!actions.isNullOrEmpty()) {
                 val actionsArray = org.json.JSONArray()
                 for ((semanticAction, actionTitle) in actions) {

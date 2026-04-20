@@ -508,7 +508,8 @@ class NotificationSyncService : NotificationListenerService() {
                 icon = iconBase64,
                 actions = actions,
                 messages = structuredMessages,
-                isSilent = isSilent
+                isSilent = isSilent,
+                androidKey = sbn.key
             )
             if (serverId != null) {
                 settings.storeNotificationMapping(sbn.key, serverId)
