@@ -33,6 +33,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
 class NotificationSyncService : NotificationListenerService() {
@@ -69,6 +70,15 @@ class NotificationSyncService : NotificationListenerService() {
     // preventing race conditions that create duplicate server entries.
     private val keyMutexes = ConcurrentHashMap<String, Mutex>()
     private fun mutexFor(key: String) = keyMutexes.computeIfAbsent(key) { Mutex() }
+
+    // Tracks server IDs for which an action has already been fired this session.
+    // Prevents the fallback poll from re-firing an action whose /dispatched call
+    // failed (server still shows actionDispatched=false on the next cycle), and
+    // prevents an FCM delivery and a concurrent poll cycle from both firing the
+    // same action. Uses ConcurrentHashMap.add() which is atomic: if add() returns
+    // false the entry was already present and the caller must skip firing.
+    private val firedActionIds: MutableSet<String> =
+        Collections.newSetFromMap(ConcurrentHashMap())
 
     private val refreshReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -288,6 +298,13 @@ class NotificationSyncService : NotificationListenerService() {
         actionTaken: String,
         actionResponse: String?
     ) {
+        // Atomically claim this action. If add() returns false it was already claimed by a
+        // concurrent FCM delivery or a previous poll cycle whose /dispatched call failed —
+        // skip to avoid firing the action a second time.
+        if (!firedActionIds.add(serverId)) {
+            Log.d(TAG, "Action '$actionTaken' for $serverId already fired this session — skipping duplicate")
+            return
+        }
         settings.removeNotificationMapping(notificationKey)
         fireAction(notificationKey, actionTaken, actionResponse)
         try { apiClient.postActionDispatched(settings.endpoint, settings.userId, serverId) } catch (_: Exception) {}
