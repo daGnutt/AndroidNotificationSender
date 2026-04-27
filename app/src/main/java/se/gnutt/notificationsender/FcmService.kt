@@ -79,10 +79,7 @@ class FcmService : FirebaseMessagingService() {
                     Log.w(TAG, "dismiss message missing notificationId")
                     return
                 }
-                sendBroadcast(Intent(ACTION_FCM_DISMISS).apply {
-                    setPackage(packageName)
-                    putExtra(EXTRA_SERVER_ID, serverId)
-                })
+                sendLocalBroadcast(ACTION_FCM_DISMISS) { putExtra(EXTRA_SERVER_ID, serverId) }
             }
 
             "action" -> {
@@ -94,22 +91,23 @@ class FcmService : FirebaseMessagingService() {
                     Log.w(TAG, "action message missing actionTaken")
                     return
                 }
-                sendBroadcast(Intent(ACTION_FCM_ACTION).apply {
-                    setPackage(packageName)
+                sendLocalBroadcast(ACTION_FCM_ACTION) {
                     putExtra(EXTRA_SERVER_ID, serverId)
                     putExtra(EXTRA_ACTION_TAKEN, actionTaken)
                     data["actionResponse"]?.let { putExtra(EXTRA_ACTION_RESPONSE, it) }
-                })
+                }
             }
 
             "resync" -> {
                 Log.i(TAG, "FCM resync requested — triggering full sync")
-                sendBroadcast(Intent(ACTION_FCM_RESYNC).apply {
-                    setPackage(packageName)
-                })
+                sendLocalBroadcast(ACTION_FCM_RESYNC)
             }
 
             else -> Log.w(TAG, "Unknown FCM message type: ${data["type"]}")
         }
+    }
+
+    private fun sendLocalBroadcast(action: String, setup: Intent.() -> Unit = {}) {
+        sendBroadcast(Intent(action).apply { setPackage(packageName); setup() })
     }
 }

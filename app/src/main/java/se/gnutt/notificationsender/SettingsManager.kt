@@ -69,7 +69,7 @@ class SettingsManager(context: Context) {
 
     @Synchronized
     fun getAppMeta(packageName: String): AppMeta? {
-        val cache = readAppMetaCache()
+        val cache = readJsonPref(KEY_APP_META_CACHE)
         if (!cache.has(packageName)) return null
         val obj = cache.optJSONObject(packageName) ?: return null
         val name = obj.optString("name").takeIf { it.isNotBlank() } ?: return null
@@ -79,33 +79,24 @@ class SettingsManager(context: Context) {
 
     @Synchronized
     fun storeAppMeta(packageName: String, name: String, icon: String?) {
-        val cache = readAppMetaCache()
+        val cache = readJsonPref(KEY_APP_META_CACHE)
         cache.put(packageName, JSONObject().apply {
             put("name", name)
             if (icon != null) put("icon", icon)
         })
-        prefs.edit().putString(KEY_APP_META_CACHE, cache.toString()).apply()
+        saveJsonPref(KEY_APP_META_CACHE, cache)
     }
 
-    private fun readMap(): JSONObject {
-        val json = prefs.getString(KEY_NOTIFICATION_MAP, "{}") ?: "{}"
-        return try {
-            JSONObject(json)
-        } catch (_: Exception) {
-            JSONObject()
-        }
+    private fun readMap(): JSONObject = readJsonPref(KEY_NOTIFICATION_MAP)
+
+    private fun saveMap(map: JSONObject) = saveJsonPref(KEY_NOTIFICATION_MAP, map)
+
+    private fun readJsonPref(key: String): JSONObject {
+        val json = prefs.getString(key, "{}") ?: "{}"
+        return try { JSONObject(json) } catch (_: Exception) { JSONObject() }
     }
 
-    private fun saveMap(map: JSONObject) {
-        prefs.edit().putString(KEY_NOTIFICATION_MAP, map.toString()).apply()
-    }
-
-    private fun readAppMetaCache(): JSONObject {
-        val json = prefs.getString(KEY_APP_META_CACHE, "{}") ?: "{}"
-        return try {
-            JSONObject(json)
-        } catch (_: Exception) {
-            JSONObject()
-        }
+    private fun saveJsonPref(key: String, obj: JSONObject) {
+        prefs.edit().putString(key, obj.toString()).apply()
     }
 }

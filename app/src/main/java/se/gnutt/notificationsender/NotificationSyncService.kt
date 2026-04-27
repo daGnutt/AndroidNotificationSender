@@ -95,9 +95,7 @@ class NotificationSyncService : NotificationListenerService() {
                     val notificationKey = settings.getNotificationKeyByServerId(serverId) ?: return
                     Log.d(TAG, "FCM dismiss for server entry $serverId")
                     settings.removeNotificationMapping(notificationKey)
-                    try { cancelNotification(notificationKey) } catch (e: Exception) {
-                        Log.e(TAG, "Failed to cancel notification: ${e.message}")
-                    }
+                    safeCancelNotification(notificationKey)
                 }
                 FcmService.ACTION_FCM_ACTION -> {
                     val serverId = intent.getStringExtra(FcmService.EXTRA_SERVER_ID) ?: return
@@ -200,7 +198,7 @@ class NotificationSyncService : NotificationListenerService() {
         // where a notification in the earlier snapshot has since been dismissed: in that
         // case onNotificationRemoved would see no mapping and exit early, leaving the
         // freshly-posted server entry orphaned.
-        val currentActiveKeys = try { activeNotifications?.map { it.key }?.toSet() } catch (_: Exception) { null }
+        val currentActiveKeys = safeActiveKeys()
 
         // Post all currently active notifications (skip those whose server entry is frozen as history)
         for (sbn in active) {
@@ -239,7 +237,7 @@ class NotificationSyncService : NotificationListenerService() {
 
             val serverNotifications = apiClient.getNotifications(settings.endpoint, settings.userId) ?: continue
             val localMappings = settings.getAllMappings()
-            val activeKeys = try { activeNotifications?.map { it.key }?.toSet() } catch (_: Exception) { null }
+            val activeKeys = safeActiveKeys()
 
             // Detect server restart: the server holds notifications in memory only, so a
             // restart wipes all entries.  If the server returns an empty list but we still
@@ -258,9 +256,7 @@ class NotificationSyncService : NotificationListenerService() {
                     serverNotif == null -> {
                         Log.d(TAG, "Fallback poll: server dismissed $serverId — cancelling local notification")
                         settings.removeNotificationMapping(notificationKey)
-                        try { cancelNotification(notificationKey) } catch (e: Exception) {
-                            Log.e(TAG, "Failed to cancel notification: ${e.message}")
-                        }
+                        safeCancelNotification(notificationKey)
                     }
 
                     serverNotif.actionTaken != null && !serverNotif.actionDispatched -> {
@@ -548,6 +544,15 @@ class NotificationSyncService : NotificationListenerService() {
             }
         }
     }
+
+    private fun safeCancelNotification(key: String) {
+        try { cancelNotification(key) } catch (e: Exception) {
+            Log.e(TAG, "Failed to cancel notification: ${e.message}")
+        }
+    }
+
+    private fun safeActiveKeys(): Set<String>? =
+        try { activeNotifications?.map { it.key }?.toSet() } catch (_: Exception) { null }
 
     private fun getAppName(packageName: String): String {
         return try {

@@ -169,22 +169,15 @@ class ApiClient {
      * Returns null on success, or an error string on failure.
      */
     fun registerFcmToken(endpoint: String, userId: String, token: String): String? {
-        return try {
-            val payload = JSONObject().apply {
-                put("userId", userId)
-                put("token", token)
-            }
-            val request = Request.Builder()
-                .url("$endpoint/api/device-tokens")
-                .post(payload.toString().toRequestBody(jsonMediaType))
-                .build()
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) null
-                else "HTTP ${response.code}: ${response.body?.string()?.take(200)}"
-            }
-        } catch (e: Exception) {
-            e.message ?: e.javaClass.simpleName
+        val payload = JSONObject().apply {
+            put("userId", userId)
+            put("token", token)
         }
+        val request = Request.Builder()
+            .url("$endpoint/api/device-tokens")
+            .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
+        return executeReturningError(request)
     }
 
     /**
@@ -192,11 +185,15 @@ class ApiClient {
      * Returns null on success, or an error string describing the failure.
      */
     fun validateUser(endpoint: String, userId: String): String? {
+        val request = Request.Builder()
+            .url("$endpoint/api/users/$userId?userId=$userId")
+            .get()
+            .build()
+        return executeReturningError(request)
+    }
+
+    private fun executeReturningError(request: Request): String? {
         return try {
-            val request = Request.Builder()
-                .url("$endpoint/api/users/$userId?userId=$userId")
-                .get()
-                .build()
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) null
                 else "HTTP ${response.code}: ${response.body?.string()?.take(200)}"
