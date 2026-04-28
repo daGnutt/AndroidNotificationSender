@@ -442,6 +442,14 @@ class NotificationSyncService : NotificationListenerService() {
                 }
                 postSbn(sbn)
 
+                // If we deleted an old server entry but the new POST failed, the notification
+                // has vanished from the backend. Trigger a full sync so the re-post happens
+                // from the current active notification snapshot.
+                if (existingServerId != null && settings.getNotificationServerId(key) == null) {
+                    Log.w(TAG, "Notification $key update lost after deleting $existingServerId — triggering resync")
+                    scope.launch { fullSync() }
+                }
+
                 // If the notification was already dismissed while we were posting (sub-second
                 // notifications), onNotificationRemoved would have found no mapping and exited
                 // early. Clean up the server entry we just created.
