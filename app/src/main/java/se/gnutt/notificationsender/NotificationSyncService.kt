@@ -473,25 +473,12 @@ class NotificationSyncService : NotificationListenerService() {
         }
     }
 
-    private suspend fun postSbn(sbn: StatusBarNotification) {
+    // smsBodyOverride is set by enrichSmsBody when re-posting with the full SMS content.
+    private suspend fun postSbn(sbn: StatusBarNotification, smsBodyOverride: String? = null) {
         val extras = sbn.notification.extras
         val title = extras.getCharSequence("android.title")?.toString().orEmpty()
         val text = extras.getCharSequence("android.text")?.toString().orEmpty()
         val bigText = extras.getCharSequence("android.bigText")?.toString()
-
-        // For the default SMS app, read the actual SMS body from the content provider to avoid
-        // potentially redacted notification content (e.g. OTP codes hidden by Android).
-        // The content provider write may lag behind onNotificationPosted (timing race), so retry
-        // a few times with a short delay before giving up.
-        val smsBody: String? = if (sbn.packageName == Telephony.Sms.getDefaultSmsPackage(this)) {
-            var body: String? = null
-            for (attempt in 1..4) {
-                body = fetchSmsBody(sbn.postTime)
-                if (body != null) break
-                if (attempt < 4) delay(1_000L)
-            }
-            body
-        } else null
 
         // MessagingStyle notifications (e.g. Messenger, WhatsApp) store the full
         // message history in android.messages as an array of Bundles.
@@ -505,9 +492,10 @@ class NotificationSyncService : NotificationListenerService() {
         val structuredMessages: List<NotificationMessage>?
         val body: String
 
-        if (smsBody != null) {
+        if (smsBodyOverride != null) {
+            // Re-post from enrichSmsBody — use the fetched SMS content directly.
             structuredMessages = null
-            body = smsBody
+            body = smsBodyOverride
         } else if (!messagesArray.isNullOrEmpty()) {
             structuredMessages = messagesArray.mapNotNull { extractMessage(it) }
             if (structuredMessages.isNotEmpty()) {
@@ -522,34 +510,38 @@ class NotificationSyncService : NotificationListenerService() {
             structuredMessages = null
             body = bigText?.takeIf { it.isNotBlank() } ?: text
         }
+
         val appName = run {
             val fresh = getAppName(sbn.packageName)
             if (fresh != sbn.packageName) {
-                // Successfully resolved a human-readable name — update cache and use it
                 val cachedIcon = settings.getAppMeta(sbn.packageName)?.icon
                 settings.storeAppMeta(sbn.packageName, fresh, cachedIcon)
                 fresh
             } else {
-                // Fell back to package name — prefer cached name if available
                 settings.getAppMeta(sbn.packageName)?.name ?: fresh
             }
         }
+
+        // Serve icon from cache immediately; only render (expensive) when the cache is empty.
+        // Icons are stable per-app, so a stale cached icon is almost always correct.
         val iconBase64 = run {
-            val fresh = getAppIconBase64(sbn.packageName)
-            if (fresh != null) {
-                // Successfully rendered icon — update cache and use it
-                val cachedName = settings.getAppMeta(sbn.packageName)?.name ?: appName
-                settings.storeAppMeta(sbn.packageName, cachedName, fresh)
-                fresh
+            val cached = settings.getAppMeta(sbn.packageName)?.icon
+            if (cached != null) {
+                cached
             } else {
-                // Rendering failed — fall back to cached icon
-                settings.getAppMeta(sbn.packageName)?.icon
+                val fresh = getAppIconBase64(sbn.packageName)
+                if (fresh != null) {
+                    val cachedName = settings.getAppMeta(sbn.packageName)?.name ?: appName
+                    settings.storeAppMeta(sbn.packageName, cachedName, fresh)
+                }
+                fresh
             }
         }
+
         val actions = sbn.notification.actions
             ?.mapNotNull { action ->
-                val title = action.title?.toString().orEmpty()
-                if (title.isBlank()) null else Pair(action.semanticAction, title)
+                val actionTitle = action.title?.toString().orEmpty()
+                if (actionTitle.isBlank()) null else Pair(action.semanticAction, actionTitle)
             }
             ?.takeIf { it.isNotEmpty() }
         // Use the NotificationListenerService ranking API to get the source app's channel.
@@ -599,11 +591,37 @@ class NotificationSyncService : NotificationListenerService() {
                         }
                     }
                 }
+                // For SMS apps, try to enrich the body in the background if this is the initial
+                // post (not already an smsBodyOverride re-post). SMS content provider writes can
+                // lag behind onNotificationPosted, so the initial post uses notification text and
+                // this coroutine retries up to 3 s later, updating via delete-and-repost if found.
+                if (smsBodyOverride == null && sbn.packageName == Telephony.Sms.getDefaultSmsPackage(this)) {
+                    scope.launch { enrichSmsBody(sbn, serverId) }
+                }
             } else {
                 Log.w(TAG, "Server rejected notification from ${sbn.packageName}")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to post notification: ${e.message}")
+        }
+    }
+
+    private suspend fun enrichSmsBody(sbn: StatusBarNotification, originalServerId: String) {
+        var smsBody: String? = null
+        for (attempt in 1..3) {
+            delay(1_000L)
+            smsBody = fetchSmsBody(sbn.postTime)
+            if (smsBody != null) break
+        }
+        if (smsBody == null) return
+        // Update the server entry with the real SMS body via delete-and-repost under the key mutex.
+        mutexFor(sbn.key).withLock {
+            val currentServerId = settings.getNotificationServerId(sbn.key)
+            if (currentServerId != originalServerId) return@withLock  // notification changed or dismissed
+            val deleteResult = apiClient.deleteNotification(settings.endpoint, settings.userId, currentServerId)
+            if (deleteResult == DeleteResult.ActionPending) return@withLock
+            settings.removeNotificationMapping(sbn.key)
+            postSbn(sbn, smsBodyOverride = smsBody)
         }
     }
 
