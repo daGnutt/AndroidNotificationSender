@@ -71,6 +71,12 @@ class NotificationSyncService : NotificationListenerService() {
     private val keyMutexes = ConcurrentHashMap<String, Mutex>()
     private fun mutexFor(key: String) = keyMutexes.computeIfAbsent(key) { Mutex() }
 
+    // In-memory queue for FCM dismiss/action commands that arrive before postSbn has stored the
+    // server-ID → notification-key mapping. Keyed by serverId. Items are drained inside postSbn
+    // immediately after storeNotificationMapping(), so the window is bounded by the POST round-trip.
+    private data class FcmCommand(val type: String, val actionTaken: String?, val actionResponse: String?)
+    private val pendingFcmQueue = ConcurrentHashMap<String, MutableList<FcmCommand>>()
+
     // Tracks server IDs for which an action has already been fired this session.
     // Prevents the fallback poll from re-firing an action whose /dispatched call
     // failed (server still shows actionDispatched=false on the next cycle), and
@@ -96,7 +102,14 @@ class NotificationSyncService : NotificationListenerService() {
                     // Mark the persisted command handled before processing so a concurrent drain
                     // on service restart doesn't also process it.
                     if (cmdId != null) settings.removePendingFcmCommand(cmdId)
-                    val notificationKey = settings.getNotificationKeyByServerId(serverId) ?: return
+                    val notificationKey = settings.getNotificationKeyByServerId(serverId)
+                    if (notificationKey == null) {
+                        // Mapping not stored yet (postSbn still in flight) — queue for when it lands.
+                        Log.d(TAG, "FCM dismiss for $serverId arrived before mapping — queuing")
+                        pendingFcmQueue.computeIfAbsent(serverId) { Collections.synchronizedList(mutableListOf()) }
+                            .add(FcmCommand("dismiss", null, null))
+                        return
+                    }
                     Log.d(TAG, "FCM dismiss for server entry $serverId")
                     settings.removeNotificationMapping(notificationKey)
                     safeCancelNotification(notificationKey)
@@ -105,7 +118,14 @@ class NotificationSyncService : NotificationListenerService() {
                     val serverId = intent.getStringExtra(FcmService.EXTRA_SERVER_ID) ?: return
                     val actionTaken = intent.getStringExtra(FcmService.EXTRA_ACTION_TAKEN) ?: return
                     if (cmdId != null) settings.removePendingFcmCommand(cmdId)
-                    val notificationKey = settings.getNotificationKeyByServerId(serverId) ?: return
+                    val notificationKey = settings.getNotificationKeyByServerId(serverId)
+                    if (notificationKey == null) {
+                        Log.d(TAG, "FCM action '$actionTaken' for $serverId arrived before mapping — queuing")
+                        val actionResponse = intent.getStringExtra(FcmService.EXTRA_ACTION_RESPONSE)
+                        pendingFcmQueue.computeIfAbsent(serverId) { Collections.synchronizedList(mutableListOf()) }
+                            .add(FcmCommand("action", actionTaken, actionResponse))
+                        return
+                    }
                     val actionResponse = intent.getStringExtra(FcmService.EXTRA_ACTION_RESPONSE)
                     Log.d(TAG, "FCM action '$actionTaken' for server entry $serverId")
                     scope.launch { handleActionRequest(notificationKey, serverId, actionTaken, actionResponse) }
@@ -552,6 +572,25 @@ class NotificationSyncService : NotificationListenerService() {
             if (serverId != null) {
                 settings.storeNotificationMapping(sbn.key, serverId)
                 Log.d(TAG, "Synced [${sbn.packageName}] \"$title\" → $serverId")
+                // Drain FCM commands that arrived before this mapping was ready (race fix #12).
+                // pendingFcmQueue.remove is atomic; the detached list is only accessible here.
+                pendingFcmQueue.remove(serverId)?.let { queued ->
+                    if (queued.isNotEmpty()) Log.d(TAG, "Draining ${queued.size} queued FCM command(s) for $serverId")
+                    for (cmd in queued) {
+                        when (cmd.type) {
+                            "dismiss" -> {
+                                settings.removeNotificationMapping(sbn.key)
+                                apiClient.deleteNotification(settings.endpoint, settings.userId, serverId)
+                                safeCancelNotification(sbn.key)
+                            }
+                            "action" -> {
+                                val actionTaken = cmd.actionTaken ?: continue
+                                val notificationKey = sbn.key
+                                scope.launch { handleActionRequest(notificationKey, serverId, actionTaken, cmd.actionResponse) }
+                            }
+                        }
+                    }
+                }
             } else {
                 Log.w(TAG, "Server rejected notification from ${sbn.packageName}")
             }
