@@ -560,7 +560,7 @@ class NotificationSyncService : NotificationListenerService() {
                 userId = settings.userId,
                 title = title,
                 body = body,
-                timestampMs = sbn.postTime,
+                timestampMs = sbn.notification.`when`.takeIf { it > 0L } ?: sbn.postTime,
                 sourcePackage = sbn.packageName,
                 appName = appName,
                 icon = iconBase64,
