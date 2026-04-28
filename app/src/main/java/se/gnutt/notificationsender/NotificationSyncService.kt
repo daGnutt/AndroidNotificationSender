@@ -117,13 +117,13 @@ class NotificationSyncService : NotificationListenerService() {
         super.onCreate()
         settings = SettingsManager(this)
         apiClient = ApiClient()
-        registerReceiver(refreshReceiver, IntentFilter(ACTION_REFRESH), RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(this, refreshReceiver, IntentFilter(ACTION_REFRESH), ContextCompat.RECEIVER_NOT_EXPORTED)
         val fcmFilter = IntentFilter().apply {
             addAction(FcmService.ACTION_FCM_DISMISS)
             addAction(FcmService.ACTION_FCM_ACTION)
             addAction(FcmService.ACTION_FCM_RESYNC)
         }
-        registerReceiver(fcmReceiver, fcmFilter, RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(this, fcmReceiver, fcmFilter, ContextCompat.RECEIVER_NOT_EXPORTED)
         Log.i(TAG, "NotificationSyncService started")
     }
 
