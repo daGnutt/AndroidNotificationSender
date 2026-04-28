@@ -2,6 +2,7 @@ package se.gnutt.notificationsender
 
 import android.content.Context
 import android.content.SharedPreferences
+import org.json.JSONArray
 import org.json.JSONObject
 
 class SettingsManager(context: Context) {
@@ -13,9 +14,18 @@ class SettingsManager(context: Context) {
         private const val KEY_NOTIFICATION_MAP = "notificationMap"
         private const val KEY_FCM_TOKEN = "fcmToken"
         private const val KEY_APP_META_CACHE = "appMetaCache"
+        private const val KEY_PENDING_FCM = "pendingFcmCommands"
     }
 
     data class AppMeta(val name: String, val icon: String?)
+
+    data class PendingFcmCommand(
+        val id: String,
+        val type: String,           // "dismiss" | "action"
+        val serverId: String,
+        val actionTaken: String?,
+        val actionResponse: String?
+    )
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -87,6 +97,51 @@ class SettingsManager(context: Context) {
         saveJsonPref(KEY_APP_META_CACHE, cache)
     }
 
+    @Synchronized
+    fun storePendingFcmCommand(cmd: PendingFcmCommand) {
+        val arr = readJsonArrayPref(KEY_PENDING_FCM)
+        arr.put(JSONObject().apply {
+            put("id", cmd.id)
+            put("type", cmd.type)
+            put("serverId", cmd.serverId)
+            if (cmd.actionTaken != null) put("actionTaken", cmd.actionTaken)
+            if (cmd.actionResponse != null) put("actionResponse", cmd.actionResponse)
+        })
+        saveJsonArrayPref(KEY_PENDING_FCM, arr)
+    }
+
+    @Synchronized
+    fun removePendingFcmCommand(id: String) {
+        val arr = readJsonArrayPref(KEY_PENDING_FCM)
+        val filtered = JSONArray()
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            if (obj.optString("id") != id) filtered.put(obj)
+        }
+        saveJsonArrayPref(KEY_PENDING_FCM, filtered)
+    }
+
+    @Synchronized
+    fun drainPendingFcmCommands(): List<PendingFcmCommand> {
+        val arr = readJsonArrayPref(KEY_PENDING_FCM)
+        if (arr.length() == 0) return emptyList()
+        val result = (0 until arr.length()).mapNotNull { i ->
+            val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+            val id = obj.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val type = obj.optString("type").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val serverId = obj.optString("serverId").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            PendingFcmCommand(
+                id = id,
+                type = type,
+                serverId = serverId,
+                actionTaken = obj.optString("actionTaken").takeIf { it.isNotBlank() },
+                actionResponse = obj.optString("actionResponse").takeIf { it.isNotBlank() }
+            )
+        }
+        prefs.edit().remove(KEY_PENDING_FCM).apply()
+        return result
+    }
+
     private fun readMap(): JSONObject = readJsonPref(KEY_NOTIFICATION_MAP)
 
     private fun saveMap(map: JSONObject) = saveJsonPref(KEY_NOTIFICATION_MAP, map)
@@ -98,5 +153,14 @@ class SettingsManager(context: Context) {
 
     private fun saveJsonPref(key: String, obj: JSONObject) {
         prefs.edit().putString(key, obj.toString()).apply()
+    }
+
+    private fun readJsonArrayPref(key: String): JSONArray {
+        val json = prefs.getString(key, "[]") ?: "[]"
+        return try { JSONArray(json) } catch (_: Exception) { JSONArray() }
+    }
+
+    private fun saveJsonArrayPref(key: String, arr: JSONArray) {
+        prefs.edit().putString(key, arr.toString()).apply()
     }
 }

@@ -26,6 +26,7 @@ class FcmService : FirebaseMessagingService() {
         const val EXTRA_SERVER_ID = "serverId"
         const val EXTRA_ACTION_TAKEN = "actionTaken"
         const val EXTRA_ACTION_RESPONSE = "actionResponse"
+        const val EXTRA_CMD_ID = "cmdId"
     }
 
     private val job = SupervisorJob()
@@ -72,6 +73,8 @@ class FcmService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
         Log.d(TAG, "FCM message received: type=${data["type"]}")
+        val settings = SettingsManager(this)
+        val cmdId = java.util.UUID.randomUUID().toString()
 
         when (data["type"]) {
             "dismiss" -> {
@@ -79,7 +82,12 @@ class FcmService : FirebaseMessagingService() {
                     Log.w(TAG, "dismiss message missing notificationId")
                     return
                 }
-                sendLocalBroadcast(ACTION_FCM_DISMISS) { putExtra(EXTRA_SERVER_ID, serverId) }
+                // Persist before broadcasting so the command survives if the service is not alive.
+                settings.storePendingFcmCommand(SettingsManager.PendingFcmCommand(cmdId, "dismiss", serverId, null, null))
+                sendLocalBroadcast(ACTION_FCM_DISMISS) {
+                    putExtra(EXTRA_SERVER_ID, serverId)
+                    putExtra(EXTRA_CMD_ID, cmdId)
+                }
             }
 
             "action" -> {
@@ -91,14 +99,18 @@ class FcmService : FirebaseMessagingService() {
                     Log.w(TAG, "action message missing actionTaken")
                     return
                 }
+                val actionResponse = data["actionResponse"]
+                settings.storePendingFcmCommand(SettingsManager.PendingFcmCommand(cmdId, "action", serverId, actionTaken, actionResponse))
                 sendLocalBroadcast(ACTION_FCM_ACTION) {
                     putExtra(EXTRA_SERVER_ID, serverId)
                     putExtra(EXTRA_ACTION_TAKEN, actionTaken)
-                    data["actionResponse"]?.let { putExtra(EXTRA_ACTION_RESPONSE, it) }
+                    actionResponse?.let { putExtra(EXTRA_ACTION_RESPONSE, it) }
+                    putExtra(EXTRA_CMD_ID, cmdId)
                 }
             }
 
             "resync" -> {
+                // No need to persist resync — onListenerConnected already performs a full sync.
                 Log.i(TAG, "FCM resync requested — triggering full sync")
                 sendLocalBroadcast(ACTION_FCM_RESYNC)
             }

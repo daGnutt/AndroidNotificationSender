@@ -89,9 +89,13 @@ class NotificationSyncService : NotificationListenerService() {
 
     private val fcmReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            val cmdId = intent.getStringExtra(FcmService.EXTRA_CMD_ID)
             when (intent.action) {
                 FcmService.ACTION_FCM_DISMISS -> {
                     val serverId = intent.getStringExtra(FcmService.EXTRA_SERVER_ID) ?: return
+                    // Mark the persisted command handled before processing so a concurrent drain
+                    // on service restart doesn't also process it.
+                    if (cmdId != null) settings.removePendingFcmCommand(cmdId)
                     val notificationKey = settings.getNotificationKeyByServerId(serverId) ?: return
                     Log.d(TAG, "FCM dismiss for server entry $serverId")
                     settings.removeNotificationMapping(notificationKey)
@@ -100,6 +104,7 @@ class NotificationSyncService : NotificationListenerService() {
                 FcmService.ACTION_FCM_ACTION -> {
                     val serverId = intent.getStringExtra(FcmService.EXTRA_SERVER_ID) ?: return
                     val actionTaken = intent.getStringExtra(FcmService.EXTRA_ACTION_TAKEN) ?: return
+                    if (cmdId != null) settings.removePendingFcmCommand(cmdId)
                     val notificationKey = settings.getNotificationKeyByServerId(serverId) ?: return
                     val actionResponse = intent.getStringExtra(FcmService.EXTRA_ACTION_RESPONSE)
                     Log.d(TAG, "FCM action '$actionTaken' for server entry $serverId")
@@ -139,9 +144,36 @@ class NotificationSyncService : NotificationListenerService() {
         super.onListenerConnected()
         if (!settings.isConfigured) return
         Log.i(TAG, "Listener connected — syncing active notifications")
-        scope.launch { fullSync() }
+        scope.launch {
+            fullSync()
+            // Drain any FCM commands that arrived while the service was not alive.
+            // Running after fullSync ensures all server-ID mappings are freshly populated.
+            drainStoredFcmCommands()
+        }
         scope.launch { pollServerDismissals() }
         registerFcmToken()
+    }
+
+    private suspend fun drainStoredFcmCommands() {
+        val commands = settings.drainPendingFcmCommands()
+        if (commands.isEmpty()) return
+        Log.i(TAG, "Draining ${commands.size} stored FCM command(s) from before service was alive")
+        for (cmd in commands) {
+            when (cmd.type) {
+                "dismiss" -> {
+                    val notificationKey = settings.getNotificationKeyByServerId(cmd.serverId) ?: continue
+                    Log.d(TAG, "Stored FCM dismiss for server entry ${cmd.serverId}")
+                    settings.removeNotificationMapping(notificationKey)
+                    safeCancelNotification(notificationKey)
+                }
+                "action" -> {
+                    val actionTaken = cmd.actionTaken ?: continue
+                    val notificationKey = settings.getNotificationKeyByServerId(cmd.serverId) ?: continue
+                    Log.d(TAG, "Stored FCM action '$actionTaken' for server entry ${cmd.serverId}")
+                    handleActionRequest(notificationKey, cmd.serverId, actionTaken, cmd.actionResponse)
+                }
+            }
+        }
     }
 
     private fun registerFcmToken() {
