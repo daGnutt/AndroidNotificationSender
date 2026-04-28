@@ -302,8 +302,10 @@ class NotificationSyncService : NotificationListenerService() {
             return
         }
         settings.removeNotificationMapping(notificationKey)
-        fireAction(notificationKey, actionTaken, actionResponse)
-        try { apiClient.postActionDispatched(settings.endpoint, settings.userId, serverId) } catch (_: Exception) {}
+        val dispatched = fireAction(notificationKey, actionTaken, actionResponse)
+        if (dispatched) {
+            try { apiClient.postActionDispatched(settings.endpoint, settings.userId, serverId) } catch (_: Exception) {}
+        }
     }
 
     /**
@@ -318,7 +320,10 @@ class NotificationSyncService : NotificationListenerService() {
      * 2. [actionTitle] parsed as a semantic action integer (e.g. "8" → THUMBS_UP)
      * 3. Keyword/emoji alias mapped to a semantic action (e.g. "like" or "👍" → THUMBS_UP)
      */
-    private fun fireAction(notificationKey: String, actionTitle: String, actionResponse: String? = null) {
+    // Returns true when the action was handled (PendingIntent fired, or notification dismissed as
+    // fallback). Returns false only when PendingIntent.send() threw — in that case the caller
+    // must not acknowledge dispatch so the server can retry.
+    private fun fireAction(notificationKey: String, actionTitle: String, actionResponse: String? = null): Boolean {
         val sbn = try { activeNotifications?.find { it.key == notificationKey } } catch (_: Exception) { null }
         if (sbn != null) {
             val actions = sbn.notification.actions
@@ -349,15 +354,20 @@ class NotificationSyncService : NotificationListenerService() {
                     Log.d(TAG, "Fired action '${action.title}' for ${sbn.packageName}")
                     // Do not cancel the notification — the source app will update or dismiss
                     // it as appropriate (e.g. Teams updates the notification after a reply).
-                    return
+                    return true
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to fire action PendingIntent: ${e.message}")
+                    // Do not fall through to dismiss — the notification is likely still active.
+                    // Returning false signals the caller to leave the server action unacknowledged
+                    // so that it can be retried on the next poll cycle or service restart.
+                    return false
                 }
             }
         }
-        // Fallback: no matching action found — dismiss the notification
+        // Fallback: notification gone or no matching action — dismiss and acknowledge.
         Log.d(TAG, "No matching action found for '$actionTitle' — dismissing notification")
         try { cancelNotification(notificationKey) } catch (_: Exception) {}
+        return true
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
