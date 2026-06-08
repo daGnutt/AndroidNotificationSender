@@ -282,6 +282,8 @@ data class MediaSessionData(
     val positionMs: Long,
     val durationMs: Long
 )
+
+data class NotificationMessage(
     val sender: String?,
     val text: String,
     val timestampMs: Long,

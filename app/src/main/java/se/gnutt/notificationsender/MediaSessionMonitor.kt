@@ -102,7 +102,7 @@ class MediaSessionMonitor(
         // Register callbacks for new sessions
         for (controller in controllers) {
             val key = sessionKeyFor(controller)
-            if (key in activeCallbacks) continue  // already tracking
+            if (activeCallbacks.containsKey(key)) continue  // already tracking
             registerController(controller, key)
             scope.launch { reportSession(controller) }
         }

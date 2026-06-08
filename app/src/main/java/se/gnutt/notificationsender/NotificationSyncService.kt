@@ -176,7 +176,7 @@ class NotificationSyncService : NotificationListenerService() {
         Log.i(TAG, "Listener connected — syncing active notifications")
         mediaSessionMonitor = MediaSessionMonitor(
             context = this,
-            notificationListenerComponent = componentName,
+            notificationListenerComponent = android.content.ComponentName(this, NotificationSyncService::class.java),
             scope = scope,
             settings = settings,
             apiClient = apiClient
