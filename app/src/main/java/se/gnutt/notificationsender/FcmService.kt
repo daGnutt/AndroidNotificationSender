@@ -23,10 +23,16 @@ class FcmService : FirebaseMessagingService() {
         /** Broadcast to trigger a full resync of active notifications to the server. */
         const val ACTION_FCM_RESYNC = "se.gnutt.notificationsender.FCM_RESYNC"
 
+        /** Broadcast to dispatch a media transport control command. */
+        const val ACTION_FCM_MEDIA_CONTROL = "se.gnutt.notificationsender.FCM_MEDIA_CONTROL"
+
         const val EXTRA_SERVER_ID = "serverId"
         const val EXTRA_ACTION_TAKEN = "actionTaken"
         const val EXTRA_ACTION_RESPONSE = "actionResponse"
         const val EXTRA_CMD_ID = "cmdId"
+        const val EXTRA_SESSION_ID = "sessionId"
+        const val EXTRA_MEDIA_ACTION = "mediaAction"
+        const val EXTRA_POSITION_MS = "positionMs"
     }
 
     private val job = SupervisorJob()
@@ -113,6 +119,22 @@ class FcmService : FirebaseMessagingService() {
                 // No need to persist resync — onListenerConnected already performs a full sync.
                 Log.i(TAG, "FCM resync requested — triggering full sync")
                 sendLocalBroadcast(ACTION_FCM_RESYNC)
+            }
+
+            "mediaControl" -> {
+                val sessionId = data["sessionId"] ?: run {
+                    Log.w(TAG, "mediaControl message missing sessionId")
+                    return
+                }
+                val action = data["mediaAction"] ?: run {
+                    Log.w(TAG, "mediaControl message missing mediaAction")
+                    return
+                }
+                sendLocalBroadcast(ACTION_FCM_MEDIA_CONTROL) {
+                    putExtra(EXTRA_SESSION_ID, sessionId)
+                    putExtra(EXTRA_MEDIA_ACTION, action)
+                    data["positionMs"]?.toLongOrNull()?.let { putExtra(EXTRA_POSITION_MS, it) }
+                }
             }
 
             else -> Log.w(TAG, "Unknown FCM message type: ${data["type"]}")

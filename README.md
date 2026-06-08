@@ -16,6 +16,7 @@ An Android app that keeps your phone's notifications in sync with a web service.
 - **Startup sync:** On connect, orphaned server entries are cleaned up and all active notifications are (re-)posted to the server
 - **Server restart resilience:** The server stores notifications in memory only. If a restart is detected (poll returns an empty list while the app has local mappings), the app automatically resyncs all active notifications so the web interface stays current
 - **FCM resync:** The server can send a `resync` FCM message (e.g. after a restart or token refresh) to trigger an immediate full sync of all active notifications
+- **Media player control:** All active `MediaSession` players on the phone are reported to the server with album art, title, artist, playback state, and position. The web interface shows dedicated player cards (album art + seek bar + transport controls). Play/pause/next/previous/seek commands are dispatched back to the phone via FCM and applied directly to the `MediaSession` — no notification required
 - **QR code setup:** Scan a QR code from the web interface to configure endpoint and user ID instantly
 - **Unredacted SMS body:** When a notification arrives from the default SMS app, the actual SMS body is read from the Telephony content provider instead of the (potentially redacted) notification text, ensuring OTP codes and other sensitive SMS content are synced correctly
 
@@ -106,6 +107,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 |-----------|------|
 | `MainActivity` | Setup UI — endpoint URL, user GUID, QR scan, listener status |
 | `NotificationSyncService` | `NotificationListenerService` — all sync logic, runs in background |
+| `MediaSessionMonitor` | Monitors active `MediaSession`s; reports state/art to server, handles media control FCM |
 | `ApiClient` | OkHttp wrapper for all REST calls |
 | `SettingsManager` | SharedPreferences wrapper; stores config and a `sbn.key → serverId` map |
 | `QrScanActivity` | Full-screen CameraX + ML Kit QR scanner |
@@ -119,10 +121,14 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 | `GET` | `/api/notifications` | Poll for server-side dismissals/actions (fallback) |
 | `GET` | `/api/users/:userId` | Verify user on setup |
 | `POST` | `/api/device-tokens` | Register FCM token for push delivery |
+| `PUT` | `/api/media-sessions/:sessionId` | Upsert a media session (state + album art) |
+| `DELETE` | `/api/media-sessions/:sessionId` | Remove a media session when it ends |
 
-The server sends FCM data messages to the phone when a notification is dismissed or an action is taken via the web UI — see [API_DOCS.md](API_DOCS.md) for the message format.
+The server sends FCM data messages to the phone when a notification is dismissed or an action is taken via the web UI — see [WebNotifications API_DOCS](https://github.com/daGnutt/WebNotifications/blob/main/API_DOCS.md) for the message format.
 
 The server can also send a `resync` FCM message (e.g. after a restart or when a new device token is registered) to trigger a full re-POST of all currently active phone notifications.
+
+For media control, the server sends a `mediaControl` FCM message with `sessionId`, `mediaAction`, and optional `positionMs`.
 
 ---
 

@@ -65,6 +65,7 @@ class NotificationSyncService : NotificationListenerService() {
 
     private lateinit var settings: SettingsManager
     private lateinit var apiClient: ApiClient
+    private var mediaSessionMonitor: MediaSessionMonitor? = null
 
     // Serialises concurrent onNotificationPosted calls for the same notification key,
     // preventing race conditions that create duplicate server entries.
@@ -134,6 +135,13 @@ class NotificationSyncService : NotificationListenerService() {
                     Log.i(TAG, "FCM resync received — triggering full sync")
                     scope.launch { fullSync() }
                 }
+                FcmService.ACTION_FCM_MEDIA_CONTROL -> {
+                    val sessionId = intent.getStringExtra(FcmService.EXTRA_SESSION_ID) ?: return
+                    val action = intent.getStringExtra(FcmService.EXTRA_MEDIA_ACTION) ?: return
+                    val positionMs = intent.getLongExtra(FcmService.EXTRA_POSITION_MS, -1L)
+                    Log.d(TAG, "FCM mediaControl: $action on session $sessionId")
+                    handleMediaControlRequest(sessionId, action, positionMs.takeIf { it >= 0 })
+                }
             }
         }
     }
@@ -147,6 +155,7 @@ class NotificationSyncService : NotificationListenerService() {
             addAction(FcmService.ACTION_FCM_DISMISS)
             addAction(FcmService.ACTION_FCM_ACTION)
             addAction(FcmService.ACTION_FCM_RESYNC)
+            addAction(FcmService.ACTION_FCM_MEDIA_CONTROL)
         }
         ContextCompat.registerReceiver(this, fcmReceiver, fcmFilter, ContextCompat.RECEIVER_NOT_EXPORTED)
         Log.i(TAG, "NotificationSyncService started")
@@ -156,6 +165,7 @@ class NotificationSyncService : NotificationListenerService() {
         super.onDestroy()
         unregisterReceiver(refreshReceiver)
         unregisterReceiver(fcmReceiver)
+        mediaSessionMonitor?.stop()
         job.cancel()
         Log.i(TAG, "NotificationSyncService stopped")
     }
@@ -164,6 +174,13 @@ class NotificationSyncService : NotificationListenerService() {
         super.onListenerConnected()
         if (!settings.isConfigured) return
         Log.i(TAG, "Listener connected — syncing active notifications")
+        mediaSessionMonitor = MediaSessionMonitor(
+            context = this,
+            notificationListenerComponent = componentName,
+            scope = scope,
+            settings = settings,
+            apiClient = apiClient
+        ).also { it.start() }
         scope.launch {
             fullSync()
             // Drain any FCM commands that arrived while the service was not alive.
@@ -329,6 +346,29 @@ class NotificationSyncService : NotificationListenerService() {
                 }
             }
         }
+    }
+
+    /**
+     * Dispatches a media transport control command to the appropriate [MediaController].
+     * Called from the FCM broadcast receiver when a "mediaControl" message arrives.
+     */
+    private fun handleMediaControlRequest(sessionId: String, action: String, positionMs: Long?) {
+        val controller = mediaSessionMonitor?.getController(sessionId)
+        if (controller == null) {
+            Log.w(TAG, "No active MediaController for session $sessionId — ignoring $action")
+            return
+        }
+        val controls = controller.transportControls
+        when (action) {
+            "play"     -> controls.play()
+            "pause"    -> controls.pause()
+            "next"     -> controls.skipToNext()
+            "previous" -> controls.skipToPrevious()
+            "seekTo"   -> positionMs?.let { controls.seekTo(it) }
+                ?: Log.w(TAG, "seekTo missing positionMs for session $sessionId")
+            else       -> Log.w(TAG, "Unknown media control action: $action")
+        }
+        Log.d(TAG, "Dispatched media control '$action' to session $sessionId")
     }
 
     /**

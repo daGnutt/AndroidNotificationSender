@@ -192,6 +192,53 @@ class ApiClient {
         return executeReturningError(request)
     }
 
+    /**
+     * PUT /api/media-sessions/:sessionId — upsert a media session record on the server.
+     * Returns true on success, false on failure.
+     */
+    fun putMediaSession(endpoint: String, userId: String, sessionId: String, data: MediaSessionData): Boolean {
+        return try {
+            val payload = JSONObject().apply {
+                put("userId", userId)
+                put("packageName", data.packageName)
+                if (data.appName != null) put("appName", data.appName)
+                if (data.appIcon != null) put("appIcon", data.appIcon)
+                if (data.title != null) put("title", data.title)
+                if (data.artist != null) put("artist", data.artist)
+                if (data.album != null) put("album", data.album)
+                if (data.albumArt != null) put("albumArt", data.albumArt)
+                put("playbackState", data.playbackState)
+                put("positionMs", data.positionMs)
+                put("durationMs", data.durationMs)
+            }
+            val request = Request.Builder()
+                .url("$endpoint/api/media-sessions/${java.net.URLEncoder.encode(sessionId, "UTF-8")}")
+                .put(payload.toString().toRequestBody(jsonMediaType))
+                .build()
+            client.newCall(request).execute().use { response -> response.isSuccessful }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * DELETE /api/media-sessions/:sessionId — removes a media session from the server.
+     * Returns true on success or 404 (already gone), false on other failures.
+     */
+    fun deleteMediaSession(endpoint: String, userId: String, sessionId: String): Boolean {
+        return try {
+            val request = Request.Builder()
+                .url("$endpoint/api/media-sessions/${java.net.URLEncoder.encode(sessionId, "UTF-8")}?userId=$userId")
+                .delete()
+                .build()
+            client.newCall(request).execute().use { response ->
+                response.isSuccessful || response.code == 404
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun executeReturningError(request: Request): String? {
         return try {
             client.newCall(request).execute().use { response ->
@@ -223,7 +270,18 @@ data class ServerNotification(
     val actionDispatched: Boolean = false
 )
 
-data class NotificationMessage(
+data class MediaSessionData(
+    val packageName: String,
+    val appName: String?,
+    val appIcon: String?,
+    val title: String?,
+    val artist: String?,
+    val album: String?,
+    val albumArt: String?,
+    val playbackState: String,   // "playing" | "paused" | "stopped"
+    val positionMs: Long,
+    val durationMs: Long
+)
     val sender: String?,
     val text: String,
     val timestampMs: Long,

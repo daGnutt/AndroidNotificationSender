@@ -55,7 +55,12 @@ Server entry deleted        → pollServerDismissals (10s loop) → cancelNotifi
 App started (reconnect)     → onListenerConnected   → reconcile orphaned entries + backfill active
 FCM "resync" received       → FcmService broadcast  → NotificationSyncService.fullSync()
 FCM token rotated           → onNewToken            → re-register token; server sends "resync" back
+Media session state change  → MediaController.Callback → ApiClient.putMediaSession  → server card
+Media session ended         → onSessionDestroyed    → ApiClient.deleteMediaSession
+FCM "mediaControl" received → FcmService broadcast  → MediaController.transportControls dispatch
 ```
+
+**`MediaSessionMonitor`** — started in `onListenerConnected()`, stopped in `onDestroy()`. Uses `MediaSessionManager.getActiveSessions(componentName)` (no extra permission — the active `NotificationListenerService` implicitly grants `MEDIA_CONTENT_CONTROL`). Registers `OnActiveSessionsChangedListener` to track session lifecycle and a `MediaController.Callback` per session for metadata/state change events. Session key = `packageName` (disambiguated with `:index` for the rare multi-session edge case). Album art is scaled to max 256 px before base64 encoding. `MediaController.Callback` fires on the main thread — all network calls are dispatched to `scope` (IO dispatcher).
 
 **`SettingsManager`** — SharedPreferences wrapper that stores endpoint, userId, a JSON map of `sbn.key → serverId`, and an app metadata cache (`packageName → { name, icon }`). All map/cache methods are `@Synchronized`. The notification map is the single source of truth for which phone notifications have been synced to the server.
 
@@ -97,7 +102,7 @@ The receiving system is **[daGnutt/WebNotifications](https://github.com/daGnutt/
 
 **Notification body priority:** Prefer `android.bigText` over `android.text` when extracting body content from `sbn.notification.extras`. For notifications from the default SMS app, the body is fetched from the `Telephony.Sms` content provider (`fetchSmsBody()`) instead of notification extras — this provides unredacted content including OTP codes. Falls back to notification extras if the query finds nothing.
 
-**FCM message types:** `FcmService.onMessageReceived()` handles `"dismiss"`, `"action"`, and `"resync"`. Dismiss and action messages are forwarded as local broadcasts to `NotificationSyncService` (which holds the `NotificationListenerService` binding). Resync also broadcasts to `NotificationSyncService`, which calls `fullSync()`.
+**FCM message types:** `FcmService.onMessageReceived()` handles `"dismiss"`, `"action"`, `"resync"`, and `"mediaControl"`. Dismiss and action messages are forwarded as local broadcasts to `NotificationSyncService` (which holds the `NotificationListenerService` binding). Resync also broadcasts to `NotificationSyncService`, which calls `fullSync()`. Media control messages (`{ type: "mediaControl", sessionId, mediaAction, positionMs? }`) are forwarded to `NotificationSyncService` which dispatches them to the matching `MediaController.transportControls`.
 
 **Action dispatch flow:** When an "action" FCM message arrives, `handleActionRequest` (1) removes the local mapping, (2) fires the intent on the device, then (3) calls `POST /api/notifications/:id/actions/dispatched` to acknowledge dispatch. The server entry is **not** deleted — it is kept so the web UI retains a history record. The mapping is removed first so that when the source app subsequently dismisses the notification, `onNotificationRemoved` finds no mapping and exits early (no spurious DELETE). The fallback poll loop only dispatches an action when `actionTaken != null && !actionDispatched` to avoid re-firing after a successful dispatch.
 
@@ -127,6 +132,8 @@ Live server: configured by the user at setup time
 | `GET` | `/api/users/:userId` | `?userId=` query param | Verify user exists (401/403 = not found/wrong user) |
 | `POST` | `/api/device-tokens` | `userId` in body | Register/update FCM token for push delivery |
 | `POST` | `/api/notifications/:id/actions/dispatched` | `userId` in body | Acknowledge action dispatch (keeps server entry for history) |
+| `PUT` | `/api/media-sessions/:sessionId` | `userId` in body | Upsert media session state (metadata + album art + playback state) |
+| `DELETE` | `/api/media-sessions/:sessionId` | `?userId=` query param | Remove media session when it ends |
 
 `userId` is a UUID obtained from `POST /api/auth` (username + password). It is **not** the username — it's the `userId` field in the response.
 
