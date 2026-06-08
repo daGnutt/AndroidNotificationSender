@@ -12,6 +12,8 @@ import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -48,6 +50,9 @@ class MediaSessionMonitor(
     // Map of sessionKey → MediaController, for use by FCM mediaControl handler.
     private val activeControllers = ConcurrentHashMap<String, MediaController>()
 
+    // Pending delayed re-report jobs, keyed by sessionKey. Cancelled if a newer report arrives first.
+    private val pendingReports = ConcurrentHashMap<String, Job>()
+
     private val sessionsChangedListener =
         MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
             onActiveSessionsChanged(controllers ?: emptyList())
@@ -76,6 +81,8 @@ class MediaSessionMonitor(
             }
             activeCallbacks.clear()
             activeControllers.clear()
+            pendingReports.values.forEach { it.cancel() }
+            pendingReports.clear()
             Log.i(TAG, "MediaSessionMonitor stopped")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping MediaSessionMonitor: ${e.message}")
@@ -95,6 +102,7 @@ class MediaSessionMonitor(
             activeControllers.remove(removedKey)?.let { ctrl ->
                 if (callback != null) ctrl.unregisterCallback(callback)
             }
+            pendingReports.remove(removedKey)?.cancel()
             Log.d(TAG, "Media session ended: $removedKey")
             scope.launch { deleteSession(removedKey) }
         }
@@ -111,14 +119,24 @@ class MediaSessionMonitor(
     private fun registerController(controller: MediaController, key: String) {
         val callback = object : MediaController.Callback() {
             override fun onMetadataChanged(metadata: MediaMetadata?) {
+                // Cancel any pending delayed re-report since we now have fresh metadata
+                pendingReports.remove(key)?.cancel()
                 scope.launch { reportSession(controller) }
             }
             override fun onPlaybackStateChanged(state: PlaybackState?) {
                 scope.launch { reportSession(controller) }
+                // Schedule a delayed re-report to catch metadata that arrives after the state change.
+                // This handles music apps that update playback state before updating metadata.
+                pendingReports.remove(key)?.cancel()
+                pendingReports[key] = scope.launch {
+                    delay(1500)
+                    if (activeControllers.containsKey(key)) reportSession(controller)
+                }
             }
             override fun onSessionDestroyed() {
                 activeCallbacks.remove(key)
                 activeControllers.remove(key)
+                pendingReports.remove(key)?.cancel()
                 scope.launch { deleteSession(key) }
             }
         }

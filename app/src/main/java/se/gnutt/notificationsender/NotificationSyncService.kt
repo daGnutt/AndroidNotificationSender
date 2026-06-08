@@ -366,6 +366,7 @@ class NotificationSyncService : NotificationListenerService() {
             "previous" -> controls.skipToPrevious()
             "seekTo"   -> positionMs?.let { controls.seekTo(it) }
                 ?: Log.w(TAG, "seekTo missing positionMs for session $sessionId")
+            "stop"     -> controls.stop()
             else       -> Log.w(TAG, "Unknown media control action: $action")
         }
         Log.d(TAG, "Dispatched media control '$action' to session $sessionId")
