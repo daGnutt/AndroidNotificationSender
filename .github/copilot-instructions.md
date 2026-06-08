@@ -4,7 +4,7 @@
 
 **Prerequisites** — set these before building:
 ```bash
-export JAVA_HOME=/home/gnutt/Downloads/android-studio-panda3-linux/android-studio/jbr
+export JAVA_HOME=/home/gnutt/Downloads/android-studio-quail1/jbr
 export ANDROID_HOME=~/Android/Sdk
 export PATH=$JAVA_HOME/bin:$PATH
 ```
