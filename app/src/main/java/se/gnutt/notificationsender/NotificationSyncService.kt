@@ -1,6 +1,7 @@
 package se.gnutt.notificationsender
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.app.RemoteInput
 import android.content.BroadcastReceiver
@@ -94,6 +95,16 @@ class NotificationSyncService : NotificationListenerService() {
         }
     }
 
+    // Fired when the device is unlocked. Immediately checks for any pending actions
+    // that were deferred while the keyguard was active, avoiding up to 5 minutes of
+    // waiting for the scheduled poll cycle when FCM is active.
+    private val userPresentReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.i(TAG, "Device unlocked — checking for deferred actions")
+            scope.launch { checkPendingActions() }
+        }
+    }
+
     private val fcmReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val cmdId = intent.getStringExtra(FcmService.EXTRA_CMD_ID)
@@ -158,6 +169,9 @@ class NotificationSyncService : NotificationListenerService() {
             addAction(FcmService.ACTION_FCM_MEDIA_CONTROL)
         }
         ContextCompat.registerReceiver(this, fcmReceiver, fcmFilter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        // ACTION_USER_PRESENT is a protected broadcast — exported flag not required,
+        // but we still restrict the receiver to this package for safety.
+        registerReceiver(userPresentReceiver, IntentFilter(Intent.ACTION_USER_PRESENT))
         Log.i(TAG, "NotificationSyncService started")
     }
 
@@ -165,6 +179,7 @@ class NotificationSyncService : NotificationListenerService() {
         super.onDestroy()
         unregisterReceiver(refreshReceiver)
         unregisterReceiver(fcmReceiver)
+        unregisterReceiver(userPresentReceiver)
         mediaSessionMonitor?.stop()
         job.cancel()
         Log.i(TAG, "NotificationSyncService stopped")
@@ -286,6 +301,24 @@ class NotificationSyncService : NotificationListenerService() {
         Log.i(TAG, "Full sync complete — posted ${active.count { it.packageName != packageName }} notifications")
     }
 
+    /**
+     * Scans for server-side actions that have not yet been dispatched and fires them.
+     * Called immediately when the device is unlocked (via [userPresentReceiver]) to avoid
+     * waiting up to 5 minutes for the scheduled poll cycle when FCM is active.
+     */
+    private suspend fun checkPendingActions() {
+        if (!settings.isConfigured) return
+        val serverNotifications = apiClient.getNotifications(settings.endpoint, settings.userId) ?: return
+        val localMappings = settings.getAllMappings()
+        for ((notificationKey, serverId) in localMappings) {
+            val serverNotif = serverNotifications.find { it.id == serverId } ?: continue
+            if (serverNotif.actionTaken != null && !serverNotif.actionDispatched) {
+                Log.d(TAG, "checkPendingActions: firing deferred action '${serverNotif.actionTaken}' for $serverId")
+                handleActionRequest(notificationKey, serverId, serverNotif.actionTaken, serverNotif.actionResponse)
+            }
+        }
+    }
+
     private suspend fun pollServerDismissals() {
         // When FCM is active (token registered), poll infrequently as a safety net for dropped
         // messages (e.g. device was offline). When FCM is unavailable, poll every 10 s so that
@@ -387,6 +420,17 @@ class NotificationSyncService : NotificationListenerService() {
         actionTaken: String,
         actionResponse: String?
     ) {
+        // Defer the action if the device is locked. Activity-type PendingIntents cannot be
+        // launched from a background service while the keyguard is active — they either throw
+        // a SecurityException or silently no-op. By returning here without adding to
+        // firedActionIds, the fallback poll loop (or the userPresentReceiver → checkPendingActions)
+        // will retry automatically once the device is unlocked.
+        val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (keyguardManager.isKeyguardLocked) {
+            Log.d(TAG, "Device is locked — deferring action '$actionTaken' for $serverId until unlock")
+            return
+        }
+
         // Atomically claim this action. If add() returns false it was already claimed by a
         // concurrent FCM delivery or a previous poll cycle whose /dispatched call failed —
         // skip to avoid firing the action a second time.
@@ -398,6 +442,10 @@ class NotificationSyncService : NotificationListenerService() {
         val dispatched = fireAction(notificationKey, actionTaken, actionResponse)
         if (dispatched) {
             try { apiClient.postActionDispatched(settings.endpoint, settings.userId, serverId) } catch (_: Exception) {}
+        } else {
+            // PendingIntent.send() threw — remove from firedActionIds so the poll loop can
+            // retry on the next cycle rather than silently dropping the action for this session.
+            firedActionIds.remove(serverId)
         }
     }
 
