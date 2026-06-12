@@ -39,6 +39,12 @@ class MediaSessionMonitor(
     companion object {
         private const val TAG = "MediaSessionMonitor"
         private const val ALBUM_ART_SIZE = 256
+
+        // System packages that create MediaSessions for non-media purposes (e.g. phone calls).
+        private val BLOCKED_PACKAGES = setOf(
+            "com.android.server.telecom",
+            "com.android.phone"
+        )
     }
 
     private val mediaSessionManager =
@@ -93,7 +99,9 @@ class MediaSessionMonitor(
     fun getController(sessionKey: String): MediaController? = activeControllers[sessionKey]
 
     private fun onActiveSessionsChanged(controllers: List<MediaController>) {
-        val newKeys = controllers.map { sessionKeyFor(it) }.toSet()
+        val newKeys = controllers
+            .filter { it.packageName !in BLOCKED_PACKAGES }
+            .map { sessionKeyFor(it) }.toSet()
         val oldKeys = activeCallbacks.keys.toSet()
 
         // Unregister callbacks and delete server entries for sessions that ended
@@ -109,6 +117,7 @@ class MediaSessionMonitor(
 
         // Register callbacks for new sessions
         for (controller in controllers) {
+            if (controller.packageName in BLOCKED_PACKAGES) continue  // skip system non-media sessions
             val key = sessionKeyFor(controller)
             if (activeCallbacks.containsKey(key)) continue  // already tracking
             registerController(controller, key)
@@ -124,10 +133,23 @@ class MediaSessionMonitor(
                 scope.launch { reportSession(controller) }
             }
             override fun onPlaybackStateChanged(state: PlaybackState?) {
+                val s = state?.state
+                if (s == PlaybackState.STATE_STOPPED ||
+                    s == PlaybackState.STATE_ERROR ||
+                    s == PlaybackState.STATE_NONE) {
+                    // Treat terminal states as session end — remove from server.
+                    // This ensures cards close immediately when playback stops and prevents
+                    // re-creation after a web UI dismiss triggers STATE_STOPPED via FCM.
+                    pendingReports.remove(key)?.cancel()
+                    activeCallbacks.remove(key)
+                    activeControllers.remove(key)?.unregisterCallback(this)
+                    scope.launch { deleteSession(key) }
+                    return
+                }
+                pendingReports.remove(key)?.cancel()
                 scope.launch { reportSession(controller) }
                 // Schedule a delayed re-report to catch metadata that arrives after the state change.
                 // This handles music apps that update playback state before updating metadata.
-                pendingReports.remove(key)?.cancel()
                 pendingReports[key] = scope.launch {
                     delay(1500)
                     if (activeControllers.containsKey(key)) reportSession(controller)
