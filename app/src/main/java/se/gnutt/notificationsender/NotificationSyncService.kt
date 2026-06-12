@@ -294,6 +294,9 @@ class NotificationSyncService : NotificationListenerService() {
             }
         }
         Log.i(TAG, "Full sync complete — posted ${active.count { it.packageName != packageName }} notifications")
+        // Re-register the FCM token so the server can reach this device after a restart or
+        // account wipe that purged device_tokens from the DB.
+        registerFcmToken()
     }
 
     /**
