@@ -9,11 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import androidx.core.content.ContextCompat
-import android.graphics.Canvas
-import android.graphics.drawable.AdaptiveIconDrawable
-import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
@@ -33,7 +29,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
@@ -750,14 +745,7 @@ class NotificationSyncService : NotificationListenerService() {
     private fun safeActiveKeys(): Set<String>? =
         try { activeNotifications?.map { it.key }?.toSet() } catch (_: Exception) { null }
 
-    private fun getAppName(packageName: String): String {
-        return try {
-            val info = packageManager.getApplicationInfo(packageName, 0)
-            packageManager.getApplicationLabel(info).toString()
-        } catch (e: Exception) {
-            packageName
-        }
-    }
+    private fun getAppName(packageName: String): String = getAppName(packageName, packageManager)
 
     /**
      * Queries the SMS content provider for the inbox message that arrived around [timestampMs].
@@ -833,7 +821,7 @@ class NotificationSyncService : NotificationListenerService() {
         withContext(Dispatchers.Main) {
             try {
                 val drawable = icon.loadDrawable(this@NotificationSyncService) ?: return@withContext null
-                drawableToBase64(drawable)
+                drawableToBase64(drawable, ICON_SIZE)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to extract sender icon: ${e.message}")
                 null
@@ -842,27 +830,11 @@ class NotificationSyncService : NotificationListenerService() {
 
     private suspend fun getAppIconBase64(packageName: String): String? = withContext(Dispatchers.Main) {
         try {
-            drawableToBase64(packageManager.getApplicationIcon(packageName))
+            drawableToBase64(packageManager.getApplicationIcon(packageName), ICON_SIZE)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to get icon for $packageName: ${e.message}")
             null
         }
-    }
-
-    /** Renders [drawable] into a [ICON_SIZE]×[ICON_SIZE] bitmap and returns a Base64-encoded PNG. */
-    private fun drawableToBase64(drawable: Drawable): String {
-        val bitmap = Bitmap.createBitmap(ICON_SIZE, ICON_SIZE, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && drawable is AdaptiveIconDrawable) {
-            drawable.background?.apply { setBounds(0, 0, ICON_SIZE, ICON_SIZE); draw(canvas) }
-            drawable.foreground?.apply { setBounds(0, 0, ICON_SIZE, ICON_SIZE); draw(canvas) }
-        } else {
-            drawable.setBounds(0, 0, ICON_SIZE, ICON_SIZE)
-            drawable.draw(canvas)
-        }
-        val stream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-        return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
     }
 }
 

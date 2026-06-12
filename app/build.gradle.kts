@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -19,10 +21,15 @@ android {
 
     signingConfigs {
         create("release") {
+            val localProps = Properties()
+            val localPropsFile = rootProject.file("local.properties")
+            if (localPropsFile.exists()) localPropsFile.inputStream().use(localProps::load)
+            fun prop(key: String, default: String): String =
+                (localProps[key] as? String) ?: System.getenv(key) ?: default
             storeFile = file("../release.jks")
-            storePassword = "android"
-            keyAlias = "notificationsender"
-            keyPassword = "android"
+            storePassword = prop("KEYSTORE_PASSWORD", "android")
+            keyAlias = prop("KEY_ALIAS", "notificationsender")
+            keyPassword = prop("KEY_PASSWORD", "android")
         }
     }
 

@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APK="$SCRIPT_DIR/app/build/outputs/apk/debug/app-debug.apk"
 
-export JAVA_HOME=/home/gnutt/Downloads/android-studio-panda3-linux/android-studio/jbr
-export ANDROID_HOME=~/Android/Sdk
+export JAVA_HOME="${JAVA_HOME:-/home/gnutt/Downloads/android-studio-quail1/jbr}"
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
 export PATH=$JAVA_HOME/bin:$PATH
 
 ADB="$ANDROID_HOME/platform-tools/adb"

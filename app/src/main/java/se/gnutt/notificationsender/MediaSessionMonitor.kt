@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
 
+
 /**
  * Monitors all active [MediaSession]s on the device and reports their state to the server.
  *
@@ -38,6 +39,7 @@ class MediaSessionMonitor(
 
     companion object {
         private const val TAG = "MediaSessionMonitor"
+        private const val ICON_SIZE = 96
         private const val ALBUM_ART_SIZE = 256
 
         // System packages that create MediaSessions for non-media purposes (e.g. phone calls).
@@ -194,7 +196,7 @@ class MediaSessionMonitor(
         val positionMs = state?.position ?: 0L
 
         val packageName = controller.packageName
-        val appName = getAppName(packageName)
+        val appName = getAppName(packageName, context.packageManager)
 
         val appIcon = getAppIconBase64(packageName)
 
@@ -247,24 +249,10 @@ class MediaSessionMonitor(
         return if (existing.isEmpty()) pkg else "$pkg:${existing.size}"
     }
 
-    private fun getAppName(packageName: String): String {
-        return try {
-            val info = context.packageManager.getApplicationInfo(packageName, 0)
-            context.packageManager.getApplicationLabel(info).toString()
-        } catch (_: Exception) {
-            packageName
-        }
-    }
-
     private suspend fun getAppIconBase64(packageName: String): String? =
         withContext(Dispatchers.Main) {
             try {
-                val drawable = context.packageManager.getApplicationIcon(packageName)
-                val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
-                val canvas = android.graphics.Canvas(bitmap)
-                drawable.setBounds(0, 0, 96, 96)
-                drawable.draw(canvas)
-                bitmapToBase64(bitmap, 96)
+                drawableToBase64(context.packageManager.getApplicationIcon(packageName), ICON_SIZE)
             } catch (_: Exception) { null }
         }
 
@@ -280,6 +268,7 @@ class MediaSessionMonitor(
         }
         val stream = ByteArrayOutputStream()
         scaled.compress(Bitmap.CompressFormat.PNG, 90, stream)
+        if (scaled !== bitmap) scaled.recycle()
         return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
     }
 }
