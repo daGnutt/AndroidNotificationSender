@@ -294,9 +294,6 @@ class NotificationSyncService : NotificationListenerService() {
             }
         }
         Log.i(TAG, "Full sync complete — posted ${active.count { it.packageName != packageName }} notifications")
-        // Re-register the FCM token so the server can reach this device after a restart or
-        // account wipe that purged device_tokens from the DB.
-        registerFcmToken()
     }
 
     /**
@@ -346,6 +343,9 @@ class NotificationSyncService : NotificationListenerService() {
             if (serverNotifications.isEmpty() && localMappings.isNotEmpty()) {
                 Log.i(TAG, "Server returned empty list with ${localMappings.size} local mappings — server may have restarted, resyncing")
                 fullSync()
+                // Re-register FCM token in case a server restart also cleared the device_tokens
+                // table. Called here (not inside fullSync) to avoid a resync→fullSync loop.
+                registerFcmToken()
                 continue
             }
 

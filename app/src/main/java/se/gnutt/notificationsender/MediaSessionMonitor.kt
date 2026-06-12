@@ -3,11 +3,13 @@ package se.gnutt.notificationsender
 import android.content.ComponentName
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.net.Uri
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -40,7 +42,7 @@ class MediaSessionMonitor(
     companion object {
         private const val TAG = "MediaSessionMonitor"
         private const val ICON_SIZE = 96
-        private const val ALBUM_ART_SIZE = 256
+        private const val ALBUM_ART_SIZE = 128
 
         // System packages that create MediaSessions for non-media purposes (e.g. phone calls).
         private val BLOCKED_PACKAGES = setOf(
@@ -183,15 +185,18 @@ class MediaSessionMonitor(
         val state = controller.playbackState
 
         val title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
+            ?: metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
         val artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST)
             ?: metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
+            ?: metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
         val album = metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM)
         val durationMs = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
 
         val playbackState = when (state?.state) {
-            PlaybackState.STATE_PLAYING -> "playing"
-            PlaybackState.STATE_PAUSED  -> "paused"
-            else                        -> "stopped"
+            PlaybackState.STATE_PLAYING,
+            PlaybackState.STATE_BUFFERING -> "playing"
+            PlaybackState.STATE_PAUSED    -> "paused"
+            else                          -> "stopped"
         }
         val positionMs = state?.position ?: 0L
 
@@ -203,6 +208,12 @@ class MediaSessionMonitor(
         val albumArt = metadata?.let { meta ->
             val bitmap = meta.getBitmap(MediaMetadata.METADATA_KEY_ART)
                 ?: meta.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+                ?: meta.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+                ?: loadBitmapFromUri(
+                    meta.getString(MediaMetadata.METADATA_KEY_ART_URI)
+                        ?: meta.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+                        ?: meta.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)
+                )
             bitmap?.let { bitmapToBase64(it, ALBUM_ART_SIZE) }
         }
 
@@ -255,6 +266,35 @@ class MediaSessionMonitor(
                 drawableToBase64(context.packageManager.getApplicationIcon(packageName), ICON_SIZE)
             } catch (_: Exception) { null }
         }
+
+    /** Loads a [Bitmap] from a content:// or https:// URI, or returns null on failure. */
+    private suspend fun loadBitmapFromUri(uriString: String?): Bitmap? {
+        if (uriString.isNullOrBlank()) return null
+        return withContext(Dispatchers.IO) {
+            try {
+                val uri = Uri.parse(uriString)
+                when (uri.scheme) {
+                    "content" -> context.contentResolver.openInputStream(uri)?.use { stream ->
+                        BitmapFactory.decodeStream(stream)
+                    }
+                    "http", "https" -> {
+                        val conn = java.net.URL(uriString).openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 3000
+                        conn.readTimeout = 5000
+                        try {
+                            conn.inputStream.use { stream -> BitmapFactory.decodeStream(stream) }
+                        } finally {
+                            conn.disconnect()
+                        }
+                    }
+                    else -> null
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to load album art from URI $uriString: ${e.message}")
+                null
+            }
+        }
+    }
 
     /** Scales [bitmap] to fit within [maxSize] px (preserving aspect ratio) and returns base64 PNG. */
     private fun bitmapToBase64(bitmap: Bitmap, maxSize: Int): String {

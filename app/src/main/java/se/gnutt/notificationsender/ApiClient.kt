@@ -1,5 +1,6 @@
 package se.gnutt.notificationsender
 
+import android.util.Log
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -211,12 +212,19 @@ class ApiClient {
                 put("positionMs", data.positionMs)
                 put("durationMs", data.durationMs)
             }
+            val url = "$endpoint/api/media-sessions/${java.net.URLEncoder.encode(sessionId, "UTF-8")}"
             val request = Request.Builder()
-                .url("$endpoint/api/media-sessions/${java.net.URLEncoder.encode(sessionId, "UTF-8")}")
+                .url(url)
                 .put(payload.toString().toRequestBody(jsonMediaType))
                 .build()
-            client.newCall(request).execute().use { response -> response.isSuccessful }
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.w("ApiClient", "putMediaSession HTTP ${response.code}: ${response.body?.string()?.take(300)}")
+                }
+                response.isSuccessful
+            }
         } catch (e: Exception) {
+            Log.w("ApiClient", "putMediaSession exception: ${e.message}")
             false
         }
     }
