@@ -10,6 +10,7 @@ import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.net.Uri
+import android.service.notification.NotificationListenerService
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -104,9 +105,25 @@ class MediaSessionMonitor(
     /** Returns the [MediaController] for [sessionKey], or null if not currently tracked. */
     fun getController(sessionKey: String): MediaController? = activeControllers[sessionKey]
 
+    /**
+     * Checks if the package has any active notifications in the notification bar.
+     * Returns true only if at least one notification from this package is currently displayed.
+     */
+    private fun hasActiveNotification(packageName: String): Boolean {
+        return try {
+            val notificationService = context as? NotificationListenerService
+            val activeNotifications = notificationService?.activeNotifications ?: return false
+            activeNotifications.any { it.packageName == packageName }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error checking active notifications for $packageName: ${e.message}")
+            false
+        }
+    }
+
     private fun onActiveSessionsChanged(controllers: List<MediaController>) {
         val newKeys = controllers
             .filter { it.packageName !in BLOCKED_PACKAGES }
+            .filter { hasActiveNotification(it.packageName) }
             .map { sessionKeyFor(it) }.toSet()
         val oldKeys = activeCallbacks.keys.toSet()
 
@@ -124,6 +141,7 @@ class MediaSessionMonitor(
         // Register callbacks for new sessions
         for (controller in controllers) {
             if (controller.packageName in BLOCKED_PACKAGES) continue  // skip system non-media sessions
+            if (!hasActiveNotification(controller.packageName)) continue  // skip sessions without active notifications
             val key = sessionKeyFor(controller)
             if (activeCallbacks.containsKey(key)) continue  // already tracking
             registerController(controller, key)
@@ -182,6 +200,14 @@ class MediaSessionMonitor(
 
     private suspend fun reportSession(controller: MediaController) {
         if (!settings.isConfigured) return
+        val packageName = controller.packageName
+        
+        // Only report if the package has an active notification in the notification bar
+        if (!hasActiveNotification(packageName)) {
+            Log.d(TAG, "Not reporting session for $packageName (no active notification)")
+            return
+        }
+        
         val key = sessionKeyFor(controller)
         val metadata = controller.metadata
         val state = controller.playbackState
