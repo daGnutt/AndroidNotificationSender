@@ -45,13 +45,6 @@ class MediaSessionMonitor(
         private const val ICON_SIZE = 96
         private const val ALBUM_ART_SIZE = 128
 
-        // System packages that create MediaSessions for non-media purposes (e.g. phone calls).
-        private val BLOCKED_PACKAGES = setOf(
-            "com.android.server.telecom",
-            "com.android.phone",
-            "com.google.android.googlequicksearchbox",
-            "org.thoughtcrime.securesms"
-        )
     }
 
     private val mediaSessionManager =
@@ -122,7 +115,6 @@ class MediaSessionMonitor(
 
     private fun onActiveSessionsChanged(controllers: List<MediaController>) {
         val newKeys = controllers
-            .filter { it.packageName !in BLOCKED_PACKAGES }
             .filter { hasActiveNotification(it.packageName) }
             .map { sessionKeyFor(it) }.toSet()
         val oldKeys = activeCallbacks.keys.toSet()
@@ -140,7 +132,6 @@ class MediaSessionMonitor(
 
         // Register callbacks for new sessions
         for (controller in controllers) {
-            if (controller.packageName in BLOCKED_PACKAGES) continue  // skip system non-media sessions
             if (!hasActiveNotification(controller.packageName)) continue  // skip sessions without active notifications
             val key = sessionKeyFor(controller)
             if (activeCallbacks.containsKey(key)) continue  // already tracking
@@ -228,7 +219,6 @@ class MediaSessionMonitor(
         }
         val positionMs = state?.position ?: 0L
 
-        val packageName = controller.packageName
         val appName = getAppName(packageName, context.packageManager)
 
         val appIcon = getAppIconBase64(packageName)
