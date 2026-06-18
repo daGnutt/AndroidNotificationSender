@@ -47,7 +47,9 @@ class MediaSessionMonitor(
         // System packages that create MediaSessions for non-media purposes (e.g. phone calls).
         private val BLOCKED_PACKAGES = setOf(
             "com.android.server.telecom",
-            "com.android.phone"
+            "com.android.phone",
+            "com.google.android.googlequicksearchbox",
+            "org.thoughtcrime.securesms"
         )
     }
 
