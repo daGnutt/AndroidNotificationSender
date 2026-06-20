@@ -14,6 +14,9 @@ import java.util.concurrent.TimeUnit
 class ApiClient(
     private val networkAllowed: (() -> Boolean)? = null
 ) {
+    companion object {
+        const val NETWORK_FAILURE_CODE = -1
+    }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -103,7 +106,7 @@ class ApiClient(
         userId: String,
         notificationId: String
     ): DeleteResult {
-        if (!canUseNetwork()) return DeleteResult.Failure(-1)
+        if (!canUseNetwork()) return DeleteResult.Failure(NETWORK_FAILURE_CODE)
         return try {
             val request = Request.Builder()
                 .url("$endpoint/api/notifications/$notificationId?userId=$userId")
@@ -118,7 +121,7 @@ class ApiClient(
                 }
             }
         } catch (e: Exception) {
-            DeleteResult.Failure(-1)
+            DeleteResult.Failure(NETWORK_FAILURE_CODE)
         }
     }
 

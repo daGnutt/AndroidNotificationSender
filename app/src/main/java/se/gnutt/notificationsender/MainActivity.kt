@@ -33,7 +33,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvFcmStatus: TextView
 
     private lateinit var settings: SettingsManager
-    private val apiClient by lazy { ApiClient { isNetworkAllowed(this, settings) } }
+    private lateinit var apiClient: ApiClient
     private val uiScope = CoroutineScope(Dispatchers.Main)
 
     private val qrLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
         tvFcmStatus = findViewById(R.id.tvFcmStatus)
 
         settings = SettingsManager(this)
+        apiClient = ApiClient { isNetworkAllowed(this, settings) }
 
         etEndpoint.setText(settings.endpoint)
         etUserId.setText(settings.userId)
