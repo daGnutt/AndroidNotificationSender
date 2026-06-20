@@ -155,7 +155,7 @@ class NotificationSyncService : NotificationListenerService() {
     override fun onCreate() {
         super.onCreate()
         settings = SettingsManager(this)
-        apiClient = ApiClient()
+        apiClient = ApiClient { isNetworkAllowed(this, settings) }
         ContextCompat.registerReceiver(this, refreshReceiver, IntentFilter(ACTION_REFRESH), ContextCompat.RECEIVER_NOT_EXPORTED)
         val fcmFilter = IntentFilter().apply {
             addAction(FcmService.ACTION_FCM_DISMISS)
@@ -840,4 +840,3 @@ class NotificationSyncService : NotificationListenerService() {
         }
     }
 }
-

@@ -11,7 +11,9 @@ import java.util.Date
 import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
-class ApiClient {
+class ApiClient(
+    private val networkAllowed: (() -> Boolean)? = null
+) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -24,6 +26,7 @@ class ApiClient {
     private val isoFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").apply {
         timeZone = TimeZone.getTimeZone("UTC")
     }
+    private val networkBlockedError = "Wi-Fi only is enabled and no Wi-Fi network is active."
 
     /**
      * POST /api/notifications — stores a new notification and fans out push messages.
@@ -43,6 +46,7 @@ class ApiClient {
         isSilent: Boolean = false,
         androidKey: String? = null
     ): String? {
+        if (!canUseNetwork()) return null
         val payload = JSONObject().apply {
             put("userId", userId)
             put("title", title)
@@ -99,6 +103,7 @@ class ApiClient {
         userId: String,
         notificationId: String
     ): DeleteResult {
+        if (!canUseNetwork()) return DeleteResult.Failure(-1)
         return try {
             val request = Request.Builder()
                 .url("$endpoint/api/notifications/$notificationId?userId=$userId")
@@ -121,6 +126,7 @@ class ApiClient {
      * GET /api/notifications — returns full notification objects from the server.
      */
     fun getNotifications(endpoint: String, userId: String): List<ServerNotification>? {
+        if (!canUseNetwork()) return null
         return try {
             val request = Request.Builder()
                 .url("$endpoint/api/notifications?userId=$userId")
@@ -153,6 +159,7 @@ class ApiClient {
         userId: String,
         notificationId: String
     ): Boolean {
+        if (!canUseNetwork()) return false
         return try {
             val payload = JSONObject().apply { put("userId", userId) }
             val request = Request.Builder()
@@ -170,6 +177,7 @@ class ApiClient {
      * Returns null on success, or an error string on failure.
      */
     fun registerFcmToken(endpoint: String, userId: String, token: String): String? {
+        if (!canUseNetwork()) return networkBlockedError
         val payload = JSONObject().apply {
             put("userId", userId)
             put("token", token)
@@ -186,6 +194,7 @@ class ApiClient {
      * Returns null on success, or an error string describing the failure.
      */
     fun validateUser(endpoint: String, userId: String): String? {
+        if (!canUseNetwork()) return networkBlockedError
         val request = Request.Builder()
             .url("$endpoint/api/users/$userId?userId=$userId")
             .get()
@@ -198,6 +207,7 @@ class ApiClient {
      * Returns true on success, false on failure.
      */
     fun putMediaSession(endpoint: String, userId: String, sessionId: String, data: MediaSessionData): Boolean {
+        if (!canUseNetwork()) return false
         return try {
             val payload = JSONObject().apply {
                 put("userId", userId)
@@ -234,6 +244,7 @@ class ApiClient {
      * Returns true on success or 404 (already gone), false on other failures.
      */
     fun deleteMediaSession(endpoint: String, userId: String, sessionId: String): Boolean {
+        if (!canUseNetwork()) return false
         return try {
             val request = Request.Builder()
                 .url("$endpoint/api/media-sessions/${java.net.URLEncoder.encode(sessionId, "UTF-8")}?userId=$userId")
@@ -257,6 +268,8 @@ class ApiClient {
             e.message ?: e.javaClass.simpleName
         }
     }
+
+    private fun canUseNetwork(): Boolean = networkAllowed?.invoke() != false
 }
 
 sealed class DeleteResult {
