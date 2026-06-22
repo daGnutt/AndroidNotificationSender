@@ -62,7 +62,7 @@ FCM "mediaControl" received → FcmService broadcast  → MediaController.transp
 
 **`MediaSessionMonitor`** — started in `onListenerConnected()`, stopped in `onDestroy()`. Uses `MediaSessionManager.getActiveSessions(componentName)` (no extra permission — the active `NotificationListenerService` implicitly grants `MEDIA_CONTENT_CONTROL`). Registers `OnActiveSessionsChangedListener` to track session lifecycle and a `MediaController.Callback` per session for metadata/state change events. Session key = `packageName` (disambiguated with `:index` for the rare multi-session edge case). Album art is scaled to max 128 px before base64 encoding. `MediaController.Callback` fires on the main thread — all network calls are dispatched to `scope` (IO dispatcher).
 
-**`SettingsManager`** — SharedPreferences wrapper that stores endpoint, userId, a JSON map of `sbn.key → serverId`, and an app metadata cache (`packageName → { name, icon }`). All map/cache methods are `@Synchronized`. The notification map is the single source of truth for which phone notifications have been synced to the server.
+**`SettingsManager`** — SharedPreferences wrapper that stores endpoint, userId, a `wifiOnly` toggle, a `wifiOfflineServerId` (server ID of the Wi-Fi offline status notification, or null), a JSON map of `sbn.key → serverId`, and an app metadata cache (`packageName → { name, icon }`). All map/cache methods are `@Synchronized`. The notification map is the single source of truth for which phone notifications have been synced to the server.
 
 **App metadata cache** — `SettingsManager` persists `appName` and `icon` (base64 PNG) per `packageName` via `storeAppMeta()` / `getAppMeta()`. In `postSbn()`, fresh values from the PackageManager are written to the cache on success; cached values are used as fallback when `getAppName()` falls back to the package name or `getAppIconBase64()` returns null. This ensures notifications are posted with correct display names and icons even during early service startup after a reinstall (when PackageManager rendering can silently fail).
 
@@ -122,6 +122,10 @@ Parsed in `QrScanActivity.parseAndReturn()`, returned via `Intent` extras to `Ma
 
 **`isSilent` flag:** Determined via `NotificationListenerService.currentRanking` (not `NotificationManager.getNotificationChannel()` which only works for the calling package). A notification is silent when its channel importance is below `IMPORTANCE_DEFAULT`. Always use the ranking API for third-party notification channels.
 
+**Wi-Fi only toggle:** `MainActivity` exposes a persisted `wifiOnly` switch. All `ApiClient` methods must respect this policy via the injected network-allowed callback (`isNetworkAllowed(context, settings)`), blocking app traffic whenever Wi-Fi-only is enabled and the active network is not Wi-Fi/Ethernet.
+
+**Wi-Fi offline status notification:** When `wifiOnly` is enabled and the device leaves Wi-Fi/Ethernet, `NotificationSyncService` posts a silent "Sync paused — not on Wi-Fi" notification to the server (via `unrestrictedApiClient` which bypasses the wifiOnly gate, allowing the call over mobile data). The server ID is stored in `settings.wifiOfflineServerId`. When Wi-Fi/Ethernet is restored, `clearOfflineNotification()` deletes the entry and `fullSync()` re-posts all active notifications. A `ConnectivityManager.NetworkCallback` registered in `onCreate()` drives both transitions. On service reconnect (`onListenerConnected()`), the initial state is checked — if wifiOnly is on and no allowed network is present, `postOfflineNotification()` is called before `fullSync()`. The `wifiOfflineServerId` entry is deliberately excluded from the regular `notificationMap` so it is never subject to the normal dismiss/sync logic.
+
 ## API Summary
 
 Live server: configured by the user at setup time
@@ -145,5 +149,6 @@ The app requires these permissions:
 - `INTERNET` — declared in manifest, granted automatically
 - Notification Listener — must be granted manually via Settings → Notification Access. The UI shows a button to open that settings screen when not granted.
 - `CAMERA` — runtime permission, requested when user taps "Scan QR"
+- `ACCESS_NETWORK_STATE` — used to enforce the Wi-Fi-only network policy before API calls
 - `READ_SMS` — declared in manifest, auto-granted alongside any SMS app permission grant; used by `fetchSmsBody()` to read unredacted SMS content from the Telephony content provider
 - `RECEIVE_SENSITIVE_NOTIFICATIONS` — declared in manifest; enables unredacted notification content for sensitive notifications on Android 15+

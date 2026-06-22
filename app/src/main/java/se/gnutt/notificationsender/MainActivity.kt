@@ -8,6 +8,7 @@ import android.provider.Settings
 import android.text.TextUtils
 import android.view.View
 import android.widget.Button
+import android.widget.CompoundButton
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -25,13 +26,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSave: Button
     private lateinit var btnGrantPermission: Button
     private lateinit var btnRefresh: Button
+    private lateinit var switchWifiOnly: CompoundButton
     private lateinit var tvSaveStatus: TextView
     private lateinit var tvListenerStatus: TextView
 
     private lateinit var tvFcmStatus: TextView
 
     private lateinit var settings: SettingsManager
-    private val apiClient = ApiClient()
+    private lateinit var apiClient: ApiClient
     private val uiScope = CoroutineScope(Dispatchers.Main)
 
     private val qrLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -54,19 +56,25 @@ class MainActivity : AppCompatActivity() {
         btnSave = findViewById(R.id.btnSave)
         btnGrantPermission = findViewById(R.id.btnGrantPermission)
         btnRefresh = findViewById(R.id.btnRefresh)
+        switchWifiOnly = findViewById(R.id.switchWifiOnly)
         tvSaveStatus = findViewById(R.id.tvSaveStatus)
         tvListenerStatus = findViewById(R.id.tvListenerStatus)
         tvFcmStatus = findViewById(R.id.tvFcmStatus)
 
         settings = SettingsManager(this)
+        apiClient = ApiClient { isNetworkAllowed(this, settings) }
 
         etEndpoint.setText(settings.endpoint)
         etUserId.setText(settings.userId)
+        switchWifiOnly.isChecked = settings.wifiOnly
 
         btnScanQr.setOnClickListener {
             qrLauncher.launch(Intent(this, QrScanActivity::class.java))
         }
         btnSave.setOnClickListener { saveAndVerify() }
+        switchWifiOnly.setOnCheckedChangeListener { _, isChecked ->
+            settings.wifiOnly = isChecked
+        }
 
         btnRefresh.setOnClickListener {
             sendBroadcast(Intent(NotificationSyncService.ACTION_REFRESH).setPackage(packageName))
@@ -161,4 +169,3 @@ class MainActivity : AppCompatActivity() {
         return false
     }
 }
-

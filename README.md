@@ -19,6 +19,7 @@ An Android app that keeps your phone's notifications in sync with a web service.
 - **Media player control:** All active `MediaSession` players on the phone are reported to the server with album art, title, artist, playback state, and position. The web interface shows dedicated player cards (album art + seek bar + transport controls). Play/pause/next/previous/seek commands are dispatched back to the phone via FCM and applied directly to the `MediaSession` — no notification required
 - **QR code setup:** Scan a QR code from the web interface to configure endpoint and user ID instantly
 - **Unredacted SMS body:** When a notification arrives from the default SMS app, the actual SMS body is read from the Telephony content provider instead of the (potentially redacted) notification text, ensuring OTP codes and other sensitive SMS content are synced correctly
+- **Wi-Fi only mode:** Optional toggle to block all app network calls when the device is not on Wi-Fi/Ethernet. When enabled and the device leaves Wi-Fi, a silent status card ("Sync paused — not on Wi-Fi") is posted to the server so the web UI knows syncing is paused. The card is automatically removed and a full sync is triggered when Wi-Fi reconnects.
 
 ---
 
@@ -109,7 +110,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 | `NotificationSyncService` | `NotificationListenerService` — all sync logic, runs in background |
 | `MediaSessionMonitor` | Monitors active `MediaSession`s; reports state/art to server, handles media control FCM |
 | `ApiClient` | OkHttp wrapper for all REST calls |
-| `SettingsManager` | SharedPreferences wrapper; stores config and a `sbn.key → serverId` map |
+| `SettingsManager` | SharedPreferences wrapper; stores config, Wi-Fi-only preference, and a `sbn.key → serverId` map |
 | `QrScanActivity` | Full-screen CameraX + ML Kit QR scanner |
 
 ### API endpoints used
@@ -137,5 +138,6 @@ For media control, the server sends a `mediaControl` FCM message with `sessionId
 - Android 8.0+ (API 26)
 - Notification listener permission
 - Camera permission (for QR scanning only)
+- `ACCESS_NETWORK_STATE` permission (used by the Wi-Fi-only toggle)
 - `RECEIVE_SENSITIVE_NOTIFICATIONS` permission declared (enables unredacted content for sensitive notifications on Android 15+)
 - `READ_SMS` permission (reads unredacted SMS body from the Telephony content provider for default SMS app notifications)
