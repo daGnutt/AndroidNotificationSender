@@ -10,6 +10,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
@@ -61,7 +64,31 @@ class NotificationSyncService : NotificationListenerService() {
 
     private lateinit var settings: SettingsManager
     private lateinit var apiClient: ApiClient
+    // Used only for posting/deleting the Wi-Fi offline status notification — bypasses the
+    // wifiOnly network policy so the call can reach the server via mobile data when Wi-Fi drops.
+    private val unrestrictedApiClient = ApiClient()
     private var mediaSessionMonitor: MediaSessionMonitor? = null
+
+    // Monitors connectivity changes to maintain the Wi-Fi offline status notification on the
+    // server when wifiOnly sync is enabled and the device is not on Wi-Fi/Ethernet.
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            if (!settings.wifiOnly) return
+            if (isNetworkAllowed(this@NotificationSyncService, settings)) {
+                scope.launch {
+                    clearOfflineNotification()
+                    if (settings.isConfigured) fullSync()
+                }
+            }
+        }
+
+        override fun onLost(network: Network) {
+            if (!settings.wifiOnly) return
+            if (!isNetworkAllowed(this@NotificationSyncService, settings)) {
+                scope.launch { postOfflineNotification() }
+            }
+        }
+    }
 
     // Serialises concurrent onNotificationPosted calls for the same notification key,
     // preventing race conditions that create duplicate server entries.
@@ -167,6 +194,8 @@ class NotificationSyncService : NotificationListenerService() {
         // ACTION_USER_PRESENT is a protected broadcast — exported flag not required,
         // but we still restrict the receiver to this package for safety.
         registerReceiver(userPresentReceiver, IntentFilter(Intent.ACTION_USER_PRESENT))
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        connectivityManager.registerNetworkCallback(NetworkRequest.Builder().build(), networkCallback)
         Log.i(TAG, "NotificationSyncService started")
     }
 
@@ -175,6 +204,8 @@ class NotificationSyncService : NotificationListenerService() {
         unregisterReceiver(refreshReceiver)
         unregisterReceiver(fcmReceiver)
         unregisterReceiver(userPresentReceiver)
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        connectivityManager?.unregisterNetworkCallback(networkCallback)
         mediaSessionMonitor?.stop()
         job.cancel()
         Log.i(TAG, "NotificationSyncService stopped")
@@ -192,6 +223,12 @@ class NotificationSyncService : NotificationListenerService() {
             apiClient = apiClient
         ).also { it.start() }
         scope.launch {
+            // If wifiOnly is on and we're currently off-network, post the offline card so the
+            // server knows syncing is paused. Do this before fullSync so the server reflects
+            // the correct state immediately on listener reconnect.
+            if (settings.wifiOnly && !isNetworkAllowed(this@NotificationSyncService, settings)) {
+                postOfflineNotification()
+            }
             fullSync()
             // Drain any FCM commands that arrived while the service was not alive.
             // Running after fullSync ensures all server-ID mappings are freshly populated.
@@ -237,6 +274,49 @@ class NotificationSyncService : NotificationListenerService() {
         }.addOnFailureListener { e ->
             Log.e(TAG, "Failed to get FCM token: ${e.message}")
         }
+    }
+
+    /**
+     * Posts a silent "Sync paused" status notification to the server so the web UI knows
+     * that Wi-Fi-only sync is currently inactive. Uses [unrestrictedApiClient] so the call
+     * can succeed over mobile data even though [settings.wifiOnly] is enabled.
+     * Idempotent: does nothing if the offline card is already stored.
+     */
+    private suspend fun postOfflineNotification() {
+        if (!settings.isConfigured) return
+        if (settings.wifiOfflineServerId != null) return
+        Log.i(TAG, "Wi-Fi lost — posting offline status notification to server")
+        val appName = try {
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(packageName, 0)).toString()
+        } catch (_: Exception) { "Notification Sender" }
+        val id = unrestrictedApiClient.postNotification(
+            endpoint = settings.endpoint,
+            userId = settings.userId,
+            title = "Sync paused — not on Wi-Fi",
+            body = "New notifications won't sync until reconnected to Wi-Fi.",
+            timestampMs = System.currentTimeMillis(),
+            sourcePackage = packageName,
+            appName = appName,
+            isSilent = true
+        )
+        if (id != null) {
+            settings.wifiOfflineServerId = id
+            Log.i(TAG, "Offline status notification posted (id=$id)")
+        } else {
+            Log.w(TAG, "Failed to post offline status notification (no network or server error)")
+        }
+    }
+
+    /**
+     * Removes the offline status notification from the server when Wi-Fi is restored.
+     * Idempotent: does nothing if no offline card is stored.
+     */
+    private suspend fun clearOfflineNotification() {
+        val id = settings.wifiOfflineServerId ?: return
+        // Clear the stored ID first so a concurrent call or service restart doesn't retry.
+        settings.wifiOfflineServerId = null
+        Log.i(TAG, "Wi-Fi available — removing offline status notification (id=$id)")
+        apiClient.deleteNotification(settings.endpoint, settings.userId, id)
     }
 
     private suspend fun fullSync() {

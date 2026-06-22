@@ -16,6 +16,7 @@ class SettingsManager(context: Context) {
         private const val KEY_WIFI_ONLY = "wifiOnly"
         private const val KEY_APP_META_CACHE = "appMetaCache"
         private const val KEY_PENDING_FCM = "pendingFcmCommands"
+        private const val KEY_WIFI_OFFLINE_ID = "wifiOfflineServerId"
     }
 
     data class AppMeta(val name: String, val icon: String?)
@@ -46,6 +47,11 @@ class SettingsManager(context: Context) {
     var wifiOnly: Boolean
         get() = prefs.getBoolean(KEY_WIFI_ONLY, false)
         set(value) = prefs.edit().putBoolean(KEY_WIFI_ONLY, value).apply()
+
+    var wifiOfflineServerId: String?
+        get() = prefs.getString(KEY_WIFI_OFFLINE_ID, null)
+        set(value) = if (value != null) prefs.edit().putString(KEY_WIFI_OFFLINE_ID, value).apply()
+                     else prefs.edit().remove(KEY_WIFI_OFFLINE_ID).apply()
 
     val isConfigured: Boolean
         get() = endpoint.isNotBlank() && userId.isNotBlank()
