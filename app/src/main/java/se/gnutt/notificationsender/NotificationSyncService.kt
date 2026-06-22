@@ -873,8 +873,15 @@ class NotificationSyncService : NotificationListenerService() {
                     Log.d(TAG, "Deleted notification $serverId from server")
                 DeleteResult.ActionPending ->
                     Log.i(TAG, "Server entry $serverId kept as history — action was pending when user dismissed")
-                is DeleteResult.Failure ->
+                is DeleteResult.Failure -> {
                     Log.w(TAG, "Server returned error ${result.code} when deleting $serverId")
+                    // Keep retryability for phone-origin dismissals: if the notification wasn't
+                    // re-posted in the meantime, restore the mapping so pollServerDismissals can
+                    // delete this orphaned server entry on a later successful network attempt.
+                    if (settings.getNotificationServerId(notificationKey) == null) {
+                        settings.storeNotificationMapping(notificationKey, serverId)
+                    }
+                }
             }
         }
     }
