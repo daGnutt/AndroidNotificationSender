@@ -676,12 +676,30 @@ class NotificationSyncService : NotificationListenerService() {
     private suspend fun postSbn(sbn: StatusBarNotification, smsData: SmsData? = null) {
         val extras = sbn.notification.extras
 
+        // Group summary notifications (FLAG_GROUP_SUMMARY) are technical wrappers used by Android
+        // to bundle individual conversation notifications. They don't represent a discrete message
+        // and should not be forwarded individually.
+        if (sbn.notification.flags and android.app.Notification.FLAG_GROUP_SUMMARY != 0) {
+            Log.d(TAG, "Skipping group summary notification from ${sbn.packageName}")
+            return
+        }
+
         // Immediately try SMS lookup for the default SMS app on every initial post.
         val defaultSmsPackage = Telephony.Sms.getDefaultSmsPackage(this)
         val effectiveSmsData: SmsData? = smsData
             ?: if (sbn.packageName == defaultSmsPackage) fetchSms(sbn.postTime) else null
 
-        val title = effectiveSmsData?.sender ?: extras.getCharSequence("android.title")?.toString().orEmpty()
+        // For the default SMS app, if the SMS database lookup failed and the notification title
+        // is blank, the notification is redacted by Android 15 (OTP/sensitive content from an
+        // older conversation re-posted when a new SMS arrived). Skip it — posting the redacted
+        // placeholder text is worse than not posting at all. enrichSmsBody will retry if needed.
+        val extrasTitle = extras.getCharSequence("android.title")?.toString().orEmpty()
+        if (sbn.packageName == defaultSmsPackage && effectiveSmsData == null && extrasTitle.isBlank()) {
+            Log.d(TAG, "Skipping redacted SMS notification from ${sbn.packageName} (fetchSms failed, title blank)")
+            return
+        }
+
+        val title = effectiveSmsData?.sender ?: extrasTitle
         val text = extras.getCharSequence("android.text")?.toString().orEmpty()
         val bigText = extras.getCharSequence("android.bigText")?.toString()
 
@@ -776,7 +794,7 @@ class NotificationSyncService : NotificationListenerService() {
             )
             if (serverId != null) {
                 settings.storeNotificationMapping(sbn.key, serverId)
-                Log.d(TAG, "Synced [${sbn.packageName}] \"$title\" → $serverId")
+                Log.d(TAG, "Synced [${sbn.packageName}] key=${sbn.key} \"$title\" → $serverId")
                 // Drain FCM commands that arrived before this mapping was ready (race fix #12).
                 // pendingFcmQueue.remove is atomic; the detached list is only accessible here.
                 pendingFcmQueue.remove(serverId)?.let { queued ->
