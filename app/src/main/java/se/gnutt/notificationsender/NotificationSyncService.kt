@@ -644,13 +644,20 @@ class NotificationSyncService : NotificationListenerService() {
     // used by enrichSmsBody to replace Android 15's redacted notification content.
     private data class SmsData(val body: String, val sender: String)
 
-    // smsData is set by enrichSmsBody when re-posting with the real SMS content.
-    // When present, both body and title are taken from the SMS database instead of extras,
-    // replacing the redacted "Sensitive notification content hidden" / "Notification" strings
-    // that Android 15 substitutes for OTP and other sensitive SMS notifications.
+    // smsData is set by enrichSmsBody when re-posting with the real SMS content (fallback path).
+    // For the initial post from the default SMS app, fetchSms() is tried immediately — Android 15
+    // redacts OTP/sensitive SMS notifications before the NLS sees them, but the SMS is already in
+    // the Telephony content provider by the time onNotificationPosted fires. The background
+    // enrichSmsBody is kept only as a fallback for devices where the content provider write lags.
     private suspend fun postSbn(sbn: StatusBarNotification, smsData: SmsData? = null) {
         val extras = sbn.notification.extras
-        val title = smsData?.sender ?: extras.getCharSequence("android.title")?.toString().orEmpty()
+
+        // Immediately try SMS lookup for the default SMS app on every initial post.
+        val defaultSmsPackage = Telephony.Sms.getDefaultSmsPackage(this)
+        val effectiveSmsData: SmsData? = smsData
+            ?: if (sbn.packageName == defaultSmsPackage) fetchSms(sbn.postTime) else null
+
+        val title = effectiveSmsData?.sender ?: extras.getCharSequence("android.title")?.toString().orEmpty()
         val text = extras.getCharSequence("android.text")?.toString().orEmpty()
         val bigText = extras.getCharSequence("android.bigText")?.toString()
 
@@ -666,10 +673,10 @@ class NotificationSyncService : NotificationListenerService() {
         val structuredMessages: List<NotificationMessage>?
         val body: String
 
-        if (smsData != null) {
-            // Re-post from enrichSmsBody — use the fetched SMS content directly.
+        if (effectiveSmsData != null) {
+            // Use the content fetched directly from the Telephony provider.
             structuredMessages = null
-            body = smsData.body
+            body = effectiveSmsData.body
         } else if (!messagesArray.isNullOrEmpty()) {
             structuredMessages = messagesArray.mapNotNull { extractMessage(it) }
             if (structuredMessages.isNotEmpty()) {
@@ -765,11 +772,11 @@ class NotificationSyncService : NotificationListenerService() {
                         }
                     }
                 }
-                // For SMS apps, try to enrich the body in the background if this is the initial
-                // post (not already an smsBodyOverride re-post). SMS content provider writes can
-                // lag behind onNotificationPosted, so the initial post uses notification text and
-                // this coroutine retries up to 3 s later, updating via delete-and-repost if found.
-                if (smsData == null && sbn.packageName == Telephony.Sms.getDefaultSmsPackage(this)) {
+                // Launch background enrichment only if the immediate fetch failed — fallback for
+                // devices where the SMS content provider write lags behind the notification post.
+                // Note: if the notification is dismissed before this coroutine runs (common for
+                // Android 15 OTP auto-dismiss), the guard in enrichSmsBody will bail early.
+                if (effectiveSmsData == null && sbn.packageName == defaultSmsPackage) {
                     scope.launch { enrichSmsBody(sbn, serverId) }
                 }
             } else {
