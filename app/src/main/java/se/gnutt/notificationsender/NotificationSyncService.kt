@@ -684,18 +684,23 @@ class NotificationSyncService : NotificationListenerService() {
             return
         }
 
-        // Immediately try SMS lookup for the default SMS app on every initial post.
+        // Immediately try SMS lookup for the default SMS app, but ONLY when the notification
+        // content is redacted by Android 15 (signalled by a blank extras title). Android 15
+        // replaces the title with "" and the body with a locale-specific "sensitive content
+        // hidden" string for OTP/sensitive SMS before the NLS sees them. Calling fetchSms
+        // unconditionally would cause old re-posted conversation notifications (posted with the
+        // same postTime as the new SMS) to pick up the wrong SMS from the DB.
         val defaultSmsPackage = Telephony.Sms.getDefaultSmsPackage(this)
-        val effectiveSmsData: SmsData? = smsData
-            ?: if (sbn.packageName == defaultSmsPackage) fetchSms(sbn.postTime) else null
-
-        // For the default SMS app, if the SMS database lookup failed and the notification title
-        // is blank, the notification is redacted by Android 15 (OTP/sensitive content from an
-        // older conversation re-posted when a new SMS arrived). Skip it — posting the redacted
-        // placeholder text is worse than not posting at all. enrichSmsBody will retry if needed.
         val extrasTitle = extras.getCharSequence("android.title")?.toString().orEmpty()
-        if (sbn.packageName == defaultSmsPackage && effectiveSmsData == null && extrasTitle.isBlank()) {
-            Log.d(TAG, "Skipping redacted SMS notification from ${sbn.packageName} (fetchSms failed, title blank)")
+        val isDefaultSmsApp = sbn.packageName == defaultSmsPackage
+        val isRedacted = isDefaultSmsApp && extrasTitle.isBlank()
+        val effectiveSmsData: SmsData? = smsData
+            ?: if (isRedacted) fetchSms(sbn.postTime) else null
+
+        // If the notification is redacted and fetchSms also failed (e.g. old conversation
+        // re-posted, SMS no longer in the DB), skip rather than forwarding placeholder text.
+        if (isRedacted && effectiveSmsData == null) {
+            Log.d(TAG, "Skipping redacted SMS notification from ${sbn.packageName} (fetchSms found nothing)")
             return
         }
 
@@ -814,11 +819,10 @@ class NotificationSyncService : NotificationListenerService() {
                         }
                     }
                 }
-                // Launch background enrichment only if the immediate fetch failed — fallback for
-                // devices where the SMS content provider write lags behind the notification post.
-                // Note: if the notification is dismissed before this coroutine runs (common for
-                // Android 15 OTP auto-dismiss), the guard in enrichSmsBody will bail early.
-                if (effectiveSmsData == null && sbn.packageName == defaultSmsPackage) {
+                // Launch background enrichment only if this was a redacted notification where
+                // the immediate fetch failed — fallback for devices where the SMS content provider
+                // write lags behind the notification post.
+                if (isRedacted && effectiveSmsData == null) {
                     scope.launch { enrichSmsBody(sbn, serverId) }
                 }
             } else {
