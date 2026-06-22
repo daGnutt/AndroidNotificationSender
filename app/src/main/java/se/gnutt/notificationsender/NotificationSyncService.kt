@@ -95,6 +95,21 @@ class NotificationSyncService : NotificationListenerService() {
     private val keyMutexes = ConcurrentHashMap<String, Mutex>()
     private fun mutexFor(key: String) = keyMutexes.computeIfAbsent(key) { Mutex() }
 
+    // Tracks keys that went through the "already gone" sub-second cleanup path, with the
+    // cleanup timestamp in milliseconds. When onNotificationPosted fires multiple times in
+    // rapid succession for the same short-lived notification (e.g. Android 15 OTP SMS posts
+    // the notification 3× within 22 ms), only the first coroutine should post to the server;
+    // subsequent ones must be suppressed or they create duplicate server entries. The TTL is
+    // 10 s — long enough to cover any burst of rapid updates, short enough not to suppress a
+    // legitimate re-show of the same notification key after user interaction.
+    private val recentlyGoneKeys = ConcurrentHashMap<String, Long>()
+    private fun markRecentlyGone(key: String) { recentlyGoneKeys[key] = System.currentTimeMillis() }
+    private fun isRecentlyGone(key: String): Boolean {
+        val ts = recentlyGoneKeys[key] ?: return false
+        if (System.currentTimeMillis() - ts > 10_000L) { recentlyGoneKeys.remove(key); return false }
+        return true
+    }
+
     // In-memory queue for FCM dismiss/action commands that arrive before postSbn has stored the
     // server-ID → notification-key mapping. Keyed by serverId. Items are drained inside postSbn
     // immediately after storeNotificationMapping(), so the window is bounded by the POST round-trip.
@@ -595,6 +610,14 @@ class NotificationSyncService : NotificationListenerService() {
         scope.launch {
             val key = sbn.key
             mutexFor(key).withLock {
+                // Suppress rapid-fire duplicate posts for a key that just went through the
+                // "already gone" cleanup path (e.g. Android 15 OTP SMS fires onNotificationPosted
+                // 3× within 22 ms for the same notification; only the first should post).
+                if (isRecentlyGone(key)) {
+                    Log.d(TAG, "Notification $key suppressed — recently cleaned up as short-lived")
+                    return@withLock
+                }
+
                 val existingServerId = settings.getNotificationServerId(key)
                 if (existingServerId != null) {
                     // Notification was updated — delete old server entry and re-post with fresh content.
@@ -626,6 +649,7 @@ class NotificationSyncService : NotificationListenerService() {
                     if (stillActive == false) {
                         Log.d(TAG, "Notification $key already gone — deleting server entry $storedServerId")
                         settings.removeNotificationMapping(key)
+                        markRecentlyGone(key)
                         val cleanupResult = apiClient.deleteNotification(settings.endpoint, settings.userId, storedServerId)
                         if (cleanupResult == DeleteResult.ActionPending) {
                             Log.i(TAG, "Sub-second cleanup: server entry $storedServerId has pending action — kept as history")
