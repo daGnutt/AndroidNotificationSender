@@ -15,4 +15,7 @@
     <string name="btn_refresh">Refresh Notifications on Backend</string>
     <string name="fcm_status_active">✓ Push delivery active (FCM)</string>
     <string name="fcm_status_polling">⚠ Push delivery unavailable — using polling fallback</string>
+    <string name="sms_perm_granted">✓ SMS permission granted (OTP unredaction enabled)</string>
+    <string name="sms_perm_missing">⚠ SMS permission not granted — OTP content will be redacted</string>
+    <string name="btn_grant_sms_permission">Grant SMS Permission</string>
 </resources>

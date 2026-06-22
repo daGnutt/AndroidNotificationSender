@@ -1,8 +1,10 @@
 package se.gnutt.notificationsender
 
+import android.Manifest
 import android.app.Activity
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
@@ -12,6 +14,7 @@ import android.widget.CompoundButton
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +35,9 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var tvFcmStatus: TextView
 
+    private lateinit var tvSmsPermStatus: TextView
+    private lateinit var btnGrantSmsPermission: Button
+
     private lateinit var settings: SettingsManager
     private lateinit var apiClient: ApiClient
     private val uiScope = CoroutineScope(Dispatchers.Main)
@@ -45,6 +51,10 @@ class MainActivity : AppCompatActivity() {
             setStatus("QR scanned — tap Save & Verify to confirm.", isError = false)
         }
     }
+
+    private val smsPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> updateStatus() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,6 +70,9 @@ class MainActivity : AppCompatActivity() {
         tvSaveStatus = findViewById(R.id.tvSaveStatus)
         tvListenerStatus = findViewById(R.id.tvListenerStatus)
         tvFcmStatus = findViewById(R.id.tvFcmStatus)
+
+        tvSmsPermStatus = findViewById(R.id.tvSmsPermStatus)
+        btnGrantSmsPermission = findViewById(R.id.btnGrantSmsPermission)
 
         settings = SettingsManager(this)
         apiClient = ApiClient { isNetworkAllowed(this, settings) }
@@ -89,6 +102,10 @@ class MainActivity : AppCompatActivity() {
 
         btnGrantPermission.setOnClickListener {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
+
+        btnGrantSmsPermission.setOnClickListener {
+            smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
         }
     }
 
@@ -139,6 +156,17 @@ class MainActivity : AppCompatActivity() {
             tvListenerStatus.text = "⚠ Notification access not granted — tap the button below"
             tvListenerStatus.setTextColor(getColor(android.R.color.holo_orange_dark))
             btnGrantPermission.visibility = View.VISIBLE
+        }
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS)
+                == PackageManager.PERMISSION_GRANTED) {
+            tvSmsPermStatus.text = getString(R.string.sms_perm_granted)
+            tvSmsPermStatus.setTextColor(getColor(android.R.color.holo_green_dark))
+            btnGrantSmsPermission.visibility = View.GONE
+        } else {
+            tvSmsPermStatus.text = getString(R.string.sms_perm_missing)
+            tvSmsPermStatus.setTextColor(getColor(android.R.color.holo_orange_dark))
+            btnGrantSmsPermission.visibility = View.VISIBLE
         }
 
         if (settings.fcmToken != null) {

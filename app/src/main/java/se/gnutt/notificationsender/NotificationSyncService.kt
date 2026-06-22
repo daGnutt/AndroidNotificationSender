@@ -640,10 +640,17 @@ class NotificationSyncService : NotificationListenerService() {
         }
     }
 
-    // smsBodyOverride is set by enrichSmsBody when re-posting with the full SMS content.
-    private suspend fun postSbn(sbn: StatusBarNotification, smsBodyOverride: String? = null) {
+    // Holds the SMS body and sender address fetched from the Telephony content provider,
+    // used by enrichSmsBody to replace Android 15's redacted notification content.
+    private data class SmsData(val body: String, val sender: String)
+
+    // smsData is set by enrichSmsBody when re-posting with the real SMS content.
+    // When present, both body and title are taken from the SMS database instead of extras,
+    // replacing the redacted "Sensitive notification content hidden" / "Notification" strings
+    // that Android 15 substitutes for OTP and other sensitive SMS notifications.
+    private suspend fun postSbn(sbn: StatusBarNotification, smsData: SmsData? = null) {
         val extras = sbn.notification.extras
-        val title = extras.getCharSequence("android.title")?.toString().orEmpty()
+        val title = smsData?.sender ?: extras.getCharSequence("android.title")?.toString().orEmpty()
         val text = extras.getCharSequence("android.text")?.toString().orEmpty()
         val bigText = extras.getCharSequence("android.bigText")?.toString()
 
@@ -659,10 +666,10 @@ class NotificationSyncService : NotificationListenerService() {
         val structuredMessages: List<NotificationMessage>?
         val body: String
 
-        if (smsBodyOverride != null) {
+        if (smsData != null) {
             // Re-post from enrichSmsBody — use the fetched SMS content directly.
             structuredMessages = null
-            body = smsBodyOverride
+            body = smsData.body
         } else if (!messagesArray.isNullOrEmpty()) {
             structuredMessages = messagesArray.mapNotNull { extractMessage(it) }
             if (structuredMessages.isNotEmpty()) {
@@ -762,7 +769,7 @@ class NotificationSyncService : NotificationListenerService() {
                 // post (not already an smsBodyOverride re-post). SMS content provider writes can
                 // lag behind onNotificationPosted, so the initial post uses notification text and
                 // this coroutine retries up to 3 s later, updating via delete-and-repost if found.
-                if (smsBodyOverride == null && sbn.packageName == Telephony.Sms.getDefaultSmsPackage(this)) {
+                if (smsData == null && sbn.packageName == Telephony.Sms.getDefaultSmsPackage(this)) {
                     scope.launch { enrichSmsBody(sbn, serverId) }
                 }
             } else {
@@ -774,13 +781,13 @@ class NotificationSyncService : NotificationListenerService() {
     }
 
     private suspend fun enrichSmsBody(sbn: StatusBarNotification, originalServerId: String) {
-        var smsBody: String? = null
+        var smsData: SmsData? = null
         for (attempt in 1..3) {
             delay(1_000L)
-            smsBody = fetchSmsBody(sbn.postTime)
-            if (smsBody != null) break
+            smsData = fetchSms(sbn.postTime)
+            if (smsData != null) break
         }
-        if (smsBody == null) return
+        if (smsData == null) return
         // Update the server entry with the real SMS body via delete-and-repost under the key mutex.
         mutexFor(sbn.key).withLock {
             val currentServerId = settings.getNotificationServerId(sbn.key)
@@ -788,7 +795,7 @@ class NotificationSyncService : NotificationListenerService() {
             val deleteResult = apiClient.deleteNotification(settings.endpoint, settings.userId, currentServerId)
             if (deleteResult == DeleteResult.ActionPending) return@withLock
             settings.removeNotificationMapping(sbn.key)
-            postSbn(sbn, smsBodyOverride = smsBody)
+            postSbn(sbn, smsData = smsData)
         }
     }
 
@@ -832,21 +839,22 @@ class NotificationSyncService : NotificationListenerService() {
 
     /**
      * Queries the SMS content provider for the inbox message that arrived around [timestampMs].
-     * Returns the raw SMS body, or null if:
+     * Returns an [SmsData] with the raw body and sender address, or null if:
      * - [READ_SMS][android.Manifest.permission.READ_SMS] has not been granted at runtime, or
      * - no matching message is found in the content provider.
      *
-     * Used to retrieve unredacted content (e.g. OTP codes) that Android may hide in notifications.
+     * Used to retrieve unredacted content (e.g. OTP codes) and the real sender that Android 15
+     * may hide in notifications via its sensitive-notification redaction mechanism.
      * A [SecurityException] catch is kept as a safety net in case the permission is revoked between
      * the check and the query.
      */
-    private fun fetchSmsBody(timestampMs: Long): String? {
+    private fun fetchSms(timestampMs: Long): SmsData? {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS)
                 != PackageManager.PERMISSION_GRANTED) {
             return null
         }
         return try {
-            val projection = arrayOf(Telephony.Sms.BODY)
+            val projection = arrayOf(Telephony.Sms.BODY, Telephony.Sms.ADDRESS)
             val selection = "${Telephony.Sms.DATE} BETWEEN ? AND ? AND ${Telephony.Sms.TYPE} = ${Telephony.Sms.MESSAGE_TYPE_INBOX}"
             val selectionArgs = arrayOf(
                 (timestampMs - 30_000).toString(),
@@ -856,14 +864,17 @@ class NotificationSyncService : NotificationListenerService() {
                 Telephony.Sms.CONTENT_URI, projection, selection, selectionArgs,
                 "${Telephony.Sms.DATE} DESC"
             )?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(cursor.getColumnIndexOrThrow(Telephony.Sms.BODY))
-                else null
+                if (cursor.moveToFirst()) {
+                    val body = cursor.getString(cursor.getColumnIndexOrThrow(Telephony.Sms.BODY)) ?: return null
+                    val sender = cursor.getString(cursor.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)) ?: ""
+                    SmsData(body, sender)
+                } else null
             }
         } catch (e: SecurityException) {
             Log.w(TAG, "READ_SMS permission revoked between check and query: ${e.message}")
             null
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to fetch SMS body from content provider: ${e.message}")
+            Log.w(TAG, "Failed to fetch SMS from content provider: ${e.message}")
             null
         }
     }

@@ -100,7 +100,7 @@ The receiving system is **[daGnutt/WebNotifications](https://github.com/daGnutt/
 
 **Server restart detection:** The backend stores notifications in memory only — a restart wipes all entries. In `pollServerDismissals`, if the server returns an empty list while local mappings exist, treat it as a restart and call `fullSync()` instead of cancelling phone notifications. This prevents all phone notifications from being dismissed on every server restart.
 
-**Notification body priority:** Prefer `android.bigText` over `android.text` when extracting body content from `sbn.notification.extras`. For notifications from the default SMS app, the body is fetched from the `Telephony.Sms` content provider (`fetchSmsBody()`) instead of notification extras — this provides unredacted content including OTP codes. Falls back to notification extras if the query finds nothing.
+**Notification body priority:** Prefer `android.bigText` over `android.text` when extracting body content from `sbn.notification.extras`. For notifications from the default SMS app, both the body and sender are fetched from the `Telephony.Sms` content provider via `fetchSms()` (returns `SmsData(body, sender)`) instead of notification extras — this bypasses Android 15's sensitive-notification redaction, which replaces OTP/SMS content with generic placeholder strings before the `NotificationListenerService` ever sees them. Falls back to notification extras if the query finds nothing or `READ_SMS` is not granted.
 
 **FCM message types:** `FcmService.onMessageReceived()` handles `"dismiss"`, `"action"`, `"resync"`, and `"mediaControl"`. Dismiss and action messages are forwarded as local broadcasts to `NotificationSyncService` (which holds the `NotificationListenerService` binding). Resync also broadcasts to `NotificationSyncService`, which calls `fullSync()`. Media control messages (`{ type: "mediaControl", sessionId, mediaAction, positionMs? }`) are forwarded to `NotificationSyncService` which dispatches them to the matching `MediaController.transportControls`.
 
@@ -108,7 +108,7 @@ The receiving system is **[daGnutt/WebNotifications](https://github.com/daGnutt/
 
 **Locked-device action deferral:** `handleActionRequest` checks the keyguard state before attempting to fire. If the device is locked, Activity-type PendingIntents would fail (SecurityException or silent no-op), so the attempt is skipped entirely. A `BroadcastReceiver` for `Intent.ACTION_USER_PRESENT` calls `checkPendingActions()` immediately when the device is unlocked, firing all deferred actions without waiting for the scheduled poll cycle (which runs every 5 min when FCM is active).
 
-**SMS content:** `SmsReceiver` has been removed. SMS notifications are handled by `NotificationSyncService` like any other notification, but `postSbn()` detects the default SMS app and fetches the actual body from the Telephony content provider. Requires `READ_SMS` permission (same permission group as `RECEIVE_SMS` — typically auto-granted if user has an SMS app).
+**SMS content:** `SmsReceiver` has been removed. SMS notifications are handled by `NotificationSyncService` like any other notification, but `postSbn()` detects the default SMS app and enriches the entry by fetching `SmsData(body, sender)` from the Telephony content provider. This is the primary defence against Android 15's OTP redaction, which replaces both title and body with generic strings before the NLS sees them. The enrichment fires as a background coroutine (`enrichSmsBody`) that retries up to 3 × 1 s and then does a delete-and-repost under the key mutex. Requires `READ_SMS` permission — **requested at runtime** in `MainActivity` via a dedicated status row and button. Without it `fetchSms()` returns null and redacted content is forwarded as-is.
 
 **QR payload format:**
 ```json
@@ -150,5 +150,5 @@ The app requires these permissions:
 - Notification Listener — must be granted manually via Settings → Notification Access. The UI shows a button to open that settings screen when not granted.
 - `CAMERA` — runtime permission, requested when user taps "Scan QR"
 - `ACCESS_NETWORK_STATE` — used to enforce the Wi-Fi-only network policy before API calls
-- `READ_SMS` — declared in manifest, auto-granted alongside any SMS app permission grant; used by `fetchSmsBody()` to read unredacted SMS content from the Telephony content provider
-- `RECEIVE_SENSITIVE_NOTIFICATIONS` — declared in manifest; enables unredacted notification content for sensitive notifications on Android 15+
+- `READ_SMS` — **runtime-requested** in `MainActivity` (shown as a status row with a grant button); used by `fetchSms()` to read unredacted SMS body and sender address from the Telephony content provider, bypassing Android 15's OTP redaction
+- `RECEIVE_SENSITIVE_NOTIFICATIONS` — declared in manifest; note this is a privileged/signature permission that has no effect for third-party apps, kept for forward compatibility

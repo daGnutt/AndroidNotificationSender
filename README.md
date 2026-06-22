@@ -18,7 +18,7 @@ An Android app that keeps your phone's notifications in sync with a web service.
 - **FCM resync:** The server can send a `resync` FCM message (e.g. after a restart or token refresh) to trigger an immediate full sync of all active notifications
 - **Media player control:** All active `MediaSession` players on the phone are reported to the server with album art, title, artist, playback state, and position. The web interface shows dedicated player cards (album art + seek bar + transport controls). Play/pause/next/previous/seek commands are dispatched back to the phone via FCM and applied directly to the `MediaSession` — no notification required
 - **QR code setup:** Scan a QR code from the web interface to configure endpoint and user ID instantly
-- **Unredacted SMS body:** When a notification arrives from the default SMS app, the actual SMS body is read from the Telephony content provider instead of the (potentially redacted) notification text, ensuring OTP codes and other sensitive SMS content are synced correctly
+- **Unredacted SMS body:** When a notification arrives from the default SMS app, the actual SMS body **and sender** are read from the Telephony content provider instead of the notification extras. On Android 15+, the OS redacts sensitive notifications (OTPs, verification codes) before the notification listener sees them — both title and body are replaced with generic placeholders. Reading directly from the SMS database bypasses this redaction, restoring the real OTP content and the sender's phone number.
 - **Wi-Fi only mode:** Optional toggle to block all app network calls when the device is not on Wi-Fi/Ethernet. When enabled and the device leaves Wi-Fi, a silent status card ("Sync paused — not on Wi-Fi") is posted to the server so the web UI knows syncing is paused. The card is automatically removed and a full sync is triggered when Wi-Fi reconnects.
 
 ---
@@ -139,5 +139,5 @@ For media control, the server sends a `mediaControl` FCM message with `sessionId
 - Notification listener permission
 - Camera permission (for QR scanning only)
 - `ACCESS_NETWORK_STATE` permission (used by the Wi-Fi-only toggle)
-- `RECEIVE_SENSITIVE_NOTIFICATIONS` permission declared (enables unredacted content for sensitive notifications on Android 15+)
-- `READ_SMS` permission (reads unredacted SMS body from the Telephony content provider for default SMS app notifications)
+- `RECEIVE_SENSITIVE_NOTIFICATIONS` permission declared (note: this is a privileged system-only permission; it has no effect for third-party apps but is kept for forward compatibility)
+- `READ_SMS` permission — **runtime-requested** via a prompt in `MainActivity`; reads unredacted SMS body and sender from the Telephony content provider to bypass Android 15's OTP redaction. Without this permission, OTP/sensitive SMS notifications will be forwarded with redacted content.
