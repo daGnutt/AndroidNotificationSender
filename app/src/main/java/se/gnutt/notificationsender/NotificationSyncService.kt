@@ -79,13 +79,17 @@ class NotificationSyncService : NotificationListenerService() {
                     clearOfflineNotification()
                     if (settings.isConfigured) fullSync()
                 }
+            } else {
+                scope.launch {
+                    postOfflineNotification()
+                }
             }
         }
 
         override fun onLost(network: Network) {
             if (!settings.wifiOnly) return
-            if (!isNetworkAllowed(this@NotificationSyncService, settings)) {
-                scope.launch { postOfflineNotification() }
+            scope.launch {
+                postOfflineNotification()
             }
         }
     }
@@ -210,7 +214,7 @@ class NotificationSyncService : NotificationListenerService() {
         // but we still restrict the receiver to this package for safety.
         registerReceiver(userPresentReceiver, IntentFilter(Intent.ACTION_USER_PRESENT))
         val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        connectivityManager.registerNetworkCallback(NetworkRequest.Builder().build(), networkCallback)
+        connectivityManager.registerDefaultNetworkCallback(networkCallback)
         Log.i(TAG, "NotificationSyncService started")
     }
 
@@ -331,7 +335,7 @@ class NotificationSyncService : NotificationListenerService() {
         // Clear the stored ID first so a concurrent call or service restart doesn't retry.
         settings.wifiOfflineServerId = null
         Log.i(TAG, "Wi-Fi available — removing offline status notification (id=$id)")
-        apiClient.deleteNotification(settings.endpoint, settings.userId, id)
+        unrestrictedApiClient.deleteNotification(settings.endpoint, settings.userId, id)
     }
 
     private suspend fun fullSync() {
