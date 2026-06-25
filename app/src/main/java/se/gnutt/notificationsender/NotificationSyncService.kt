@@ -99,6 +99,11 @@ class NotificationSyncService : NotificationListenerService() {
     private val keyMutexes = ConcurrentHashMap<String, Mutex>()
     private fun mutexFor(key: String) = keyMutexes.computeIfAbsent(key) { Mutex() }
 
+    // Serialises postOfflineNotification / clearOfflineNotification so that concurrent
+    // callbacks (onLost + onAvailable firing together on Wi-Fi drop) cannot both pass the
+    // wifiOfflineServerId == null guard and post two "Sync paused" cards.
+    private val offlineNotificationMutex = Mutex()
+
     // Tracks keys that went through the "already gone" sub-second cleanup path, with the
     // cleanup timestamp in milliseconds. When onNotificationPosted fires multiple times in
     // rapid succession for the same short-lived notification (e.g. Android 15 OTP SMS posts
@@ -303,26 +308,28 @@ class NotificationSyncService : NotificationListenerService() {
      */
     private suspend fun postOfflineNotification() {
         if (!settings.isConfigured) return
-        if (settings.wifiOfflineServerId != null) return
-        Log.i(TAG, "Wi-Fi lost — posting offline status notification to server")
-        val appName = try {
-            packageManager.getApplicationLabel(packageManager.getApplicationInfo(packageName, 0)).toString()
-        } catch (_: Exception) { "Notification Sender" }
-        val id = unrestrictedApiClient.postNotification(
-            endpoint = settings.endpoint,
-            userId = settings.userId,
-            title = "Sync paused — not on Wi-Fi",
-            body = "New notifications won't sync until reconnected to Wi-Fi.",
-            timestampMs = System.currentTimeMillis(),
-            sourcePackage = packageName,
-            appName = appName,
-            isSilent = true
-        )
-        if (id != null) {
-            settings.wifiOfflineServerId = id
-            Log.i(TAG, "Offline status notification posted (id=$id)")
-        } else {
-            Log.w(TAG, "Failed to post offline status notification (no network or server error)")
+        offlineNotificationMutex.withLock {
+            if (settings.wifiOfflineServerId != null) return@withLock
+            Log.i(TAG, "Wi-Fi lost — posting offline status notification to server")
+            val appName = try {
+                packageManager.getApplicationLabel(packageManager.getApplicationInfo(packageName, 0)).toString()
+            } catch (_: Exception) { "Notification Sender" }
+            val id = unrestrictedApiClient.postNotification(
+                endpoint = settings.endpoint,
+                userId = settings.userId,
+                title = "Sync paused — not on Wi-Fi",
+                body = "New notifications won't sync until reconnected to Wi-Fi.",
+                timestampMs = System.currentTimeMillis(),
+                sourcePackage = packageName,
+                appName = appName,
+                isSilent = true
+            )
+            if (id != null) {
+                settings.wifiOfflineServerId = id
+                Log.i(TAG, "Offline status notification posted (id=$id)")
+            } else {
+                Log.w(TAG, "Failed to post offline status notification (no network or server error)")
+            }
         }
     }
 
@@ -331,11 +338,13 @@ class NotificationSyncService : NotificationListenerService() {
      * Idempotent: does nothing if no offline card is stored.
      */
     private suspend fun clearOfflineNotification() {
-        val id = settings.wifiOfflineServerId ?: return
-        // Clear the stored ID first so a concurrent call or service restart doesn't retry.
-        settings.wifiOfflineServerId = null
-        Log.i(TAG, "Wi-Fi available — removing offline status notification (id=$id)")
-        unrestrictedApiClient.deleteNotification(settings.endpoint, settings.userId, id)
+        offlineNotificationMutex.withLock {
+            val id = settings.wifiOfflineServerId ?: return@withLock
+            // Clear the stored ID first so a concurrent call or service restart doesn't retry.
+            settings.wifiOfflineServerId = null
+            Log.i(TAG, "Wi-Fi available — removing offline status notification (id=$id)")
+            unrestrictedApiClient.deleteNotification(settings.endpoint, settings.userId, id)
+        }
     }
 
     private suspend fun fullSync() {
